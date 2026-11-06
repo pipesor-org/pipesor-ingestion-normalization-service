@@ -1,21 +1,24 @@
-# Ingestion and Normalization Service agents
+# Repository instructions
 
-Read [README.md](README.md), [architecture consumption](docs/architecture.md) and [deployment contract](docs/deployment-contract.md) before changes. Follow the linked organization contribution/security policies; keep work on short-lived branches with English Conventional Commits and reviewed squash PRs.
+## Context by task
 
-## Scope and authority
+- Use [README.md](README.md#development-and-verification) for setup, runnable commands and contribution policies. Add verified commands there when introducing application tooling; reference them rather than maintaining a second command list here.
+- For capture, normalization, privacy or publication changes, consult [architecture](docs/architecture.md#service-relationships) and its current source model, including this service's canonical event context. For GitHub authentication changes, consult the applicable ADR-005 source linked there. Follow the references for the affected subject, not the entire documentation set for every edit.
+- For dependency selection, runtime configuration, credentials or delivery work, consult the relevant sections of the [deployment contract](docs/deployment-contract.md). Its development baseline records the authorized version-selection policy; the data lifecycle records the absence of owned persistent tables.
+- Treat local architecture summaries as navigation, not frozen specifications. Use the accessible `../../pipesor-docs/` checkout or linked sources on `main`, accounting for later accepted decisions and relevant uncommitted changes. Inspect uncommitted source changes separately; their presence does not establish integration or approval. Report unavailable or conflicting evidence when it affects the task. Documentation links must follow `main` across repositories and relative paths within this repository; a consulted revision may be recorded as text only.
 
-- Own `ingestion_normalization_service`: Capture authorized workflow evidence, normalize canonical events, protect sensitive data and assign correlationId before publishing to the existing broker.
-- Use the current `pipesor-docs` sources and its AGENTS.md, relevant model IDs/invariants and applicable Accepted ADRs. Record the revision consulted; inspect dirty source changes separately. Architecture remains draft; confirmed does not mean implemented, proposed classes/API examples do not approve contracts, and assumptions remain assumptions.
-- Preserve ADR-018 boundaries: Java / Spring Boot, lightweight DDD where appropriate, logical CQRS, one physical PostgreSQL instance, exclusive owned-table writes, no cross-schema FK/ORM navigation and no Event Sourcing. Do not create artificial domain layers before code needs them.
-- Never resolve pending decisions, choose unspecified versions/models or add relationships to fill a deployment gap. Report conflicts and seek an authorized decision in the architecture owner repository.
-- This increment authorizes documentation and agent setup only. Future endpoints, business behavior, contracts, build tooling and infrastructure need their own agreed scope. Never change neighboring repositories, global configuration, credentials or infrastructure as a side effect.
+## Implementation constraints
 
-## Work and review
+- Keep GitHub capture within the authorized repository/workflow scope and the read-only GitHub App installation-token boundary. Do not turn evidence collection into workflow mutation or artifact publication. Validate incoming source data and caller authenticity at the trust boundary using the agreed integration contract; do not assume an inbound event authorizes subsequent reads.
+- Apply masking, anonymization, secret filtering and data minimization before evidence reaches the broker or downstream AI processing. Check failure paths and logs for sensitive-data exposure as well as the published payload. Preserve provenance and canonical context, including `correlationId`, through normalization.
+- Do not introduce persistent tables, downstream-service writes or a separate privacy gateway to complete ingestion. Check capture, normalization and publication together when changing behavior; use the agreed message and failure/re-delivery contracts rather than assuming exactly-once publication or choosing a deduplication scheme by inference.
+- A request to implement a local increment authorizes its required local code, tooling and checks. Do not create cloud resources, permissions or secrets, or modify neighboring repositories as a side effect. Keep credentials and sensitive evidence out of committed files and reported output.
+- If source authorization, webhook verification, event semantics or another required contract is unresolved, identify the specific pending decision and its impact. Continue independent work; do not invent integration behavior or block the whole service because an unrelated decision remains open.
 
-The main session scopes and implements the smallest complete authorized change. Use `ingestion_reviewer` for changes affecting its specialized risks; handle small documentation edits directly. Give it the objective, changed files and required checks; it reviews without editing or delegating. Shared instructions live here rather than in each agent. Agent review does not replace human approval.
+## Verification and handoff
 
-Service-specific checks: Trust boundaries, authorized read-only capture, masking/anonymization/minimization before AI, canonical context and publication; no separate privacy gateway.
+Use the applicable checks documented in the README. Add behavior checks with the first executable increment, including material failure cases for trust validation, sanitization, context preservation and publication. Use synthetic evidence and mocked integration boundaries for isolated tests; live GitHub or Azure checks need their own agreed scope and access.
 
-For documentation, verify source coherence, relative links and TOML syntax, then run `git diff --check`. For later executable changes, inspect callers/configuration/tests first and add a small meaningful test for nontrivial behavior; run the checks supplied by the approved implementation. Do not invent a build command now. Report checks actually run, omissions and unresolved decisions.
+For documentation-only edits, check affected links and source coherence; parse TOML when changing agent configuration. Do not claim a build or integration passed before it exists and has run. Keep the documentation that owns a changed behavior or command current in the same change. Report what changed, checks actually performed and remaining blockers. For substantial work spanning sessions, keep a task-specific plan with scope, acceptance criteria and verification progress; a small edit needs no plan file.
 
-Keep secrets, tokens, personal data and machine state out of commits and tool output. Do not create credentials, grants or deploy infrastructure. Protect evidence before NLP/RAG/LLM; preserve correlationId/provenance, human review, non-autonomous remediation and evaluation/corpus separation as applicable. The deployment contract records readiness and grants no approvals.
+When a focused review is warranted and delegation is authorized, `ingestion_reviewer` checks trust boundaries, privacy, canonical context and publication. Supply the task and affected paths. Its review supplements the main agent's verification and human review.
