@@ -73,7 +73,7 @@ Documented fact: incoming consumers/callers are listed in [service relationships
 
 Documented ownership from ADR-018 and `model/domain.yml.entities`:
 
-No persistent tables or schema are assigned to this service.
+The earlier consumed model assigns no persistent tables or schema to this service. The [approved ADR-020 local evolution](architecture.md#approved-github-access-evolution) now assigns logical ownership of GitHub linkage and credentials to Ingestion; physical schema, secure custody, migrations, retention/deletion and permissions remain undefined. No tables, secret store or migration payload are approved by that logical ownership.
 
 One physical PostgreSQL instance is shared; queries and commands use logical CQRS. Writes are confined to owned tables; shared schemas do not grant cross-owner writes. Physical FKs may exist within a schema; cross-schema references are logical IDs, with no ORM navigation across contexts (ADR-018, DD-014, PD-031). `audit.audit_events` has shared cross-cutting ownership and is not assigned exclusively to this repository; exact shared audit-write mechanics remain pending PD-035. Inferred `pipeline_access_grants`, where listed, preserve `ia_only`/inferred status and pending PD-007/008. No persistent schema is added for technical processing services without documented ownership.
 
@@ -101,3 +101,7 @@ Before IaC consumes this contract, provide:
 4. The applicable independent environment promotion approvals and separate authorization for any infrastructure action. Contract approval alone does not authorize deployment.
 
 **Approval evidence today: none for this service's delivery contract.** ADRs retain their recorded Accepted status; missing individual acceptance records remain PD-014. This document is sufficient to expose gaps while repository initialization proceeds; it is insufficient to claim deployability.
+
+## ADR-020 connector readiness boundary
+
+The [approved local architecture evolution](architecture.md#approved-github-access-evolution) adds user connection/discovery and internal verified access/metadata responsibilities to the earlier installation-token capture boundary. Its source overlay is not integrated main. User-token custody/renewal and callback protection require an accepted security/storage contract; internal service authentication, verifiable Entra subject propagation, routes/schemas, audiences/scopes, errors, timeouts and versioning remain delivery inputs under PD-027/034/035. No credential mechanism, application setting, resource or deployment is selected here. Future implementation must distinguish local doubles from real GitHub/Entra/Service Bus verification and preserve the existing readiness gaps above.
