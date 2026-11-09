@@ -8,6 +8,21 @@ spring:
   sql:
     init:
       mode: never
+server:
+  address: ${INGESTION_HTTP_ADDRESS:127.0.0.1}
+  port: ${INGESTION_HTTP_PORT}
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+ingestion:
+  capture:
+    enabled: false
+  messaging:
+    enabled: false
+  protection:
+    enabled: false
 logging:
   level:
     org.hibernate.orm.jdbc.error: OFF

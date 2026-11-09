@@ -6,20 +6,24 @@ import java.util.Map;
 import org.pipesor.ingestion.github.domain.model.valueobjects.AccessContext;
 import org.pipesor.ingestion.github.domain.model.valueobjects.RepositoryTarget;
 import org.pipesor.ingestion.github.domain.model.valueobjects.WorkflowMetadata;
+import org.pipesor.ingestion.github.domain.model.valueobjects.GitHubLink;
 
 public final class GitHubViews {
     private GitHubViews() {}
 
-    public record RepositoryAccess(boolean admitted, boolean readable, boolean administrator) {}
-    public record Access(AccessContext context, String githubUserId, Map<RepositoryTarget, RepositoryAccess> repositories,
+    public record RepositoryAccess(boolean admitted, boolean readable, boolean administrator, String accountId) {
+        public RepositoryAccess(boolean admitted, boolean readable, boolean administrator) { this(admitted, readable, administrator, null); }
+    }
+    public record Access(AccessContext context, GitHubLink link, Map<RepositoryTarget, RepositoryAccess> repositories,
                          Instant observedAt) {
         public Access { repositories = Map.copyOf(repositories); }
+        public String githubUserId() { return link.githubUserId(); }
     }
     public record Repository(RepositoryTarget target, String fullName, String defaultBranch) {}
-    public record Repositories(AccessContext context, String githubUserId, List<Repository> repositories) {
+    public record Repositories(AccessContext context, GitHubLink link, Instant observedAt, List<Repository> repositories) {
         public Repositories { repositories = List.copyOf(repositories); }
     }
-    public record Workflows(AccessContext context, String githubUserId, Repository repository,
+    public record Workflows(AccessContext context, GitHubLink link, Instant observedAt, Repository repository,
                             List<WorkflowMetadata> workflows) {
         public Workflows { workflows = List.copyOf(workflows); }
     }

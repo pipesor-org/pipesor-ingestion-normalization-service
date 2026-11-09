@@ -24,7 +24,6 @@ import org.pipesor.ingestion.github.domain.model.valueobjects.GitHubLink;
 import org.pipesor.ingestion.github.domain.model.valueobjects.RepositoryFacts;
 import org.pipesor.ingestion.github.domain.model.valueobjects.RepositoryTarget;
 import org.pipesor.ingestion.github.domain.model.valueobjects.WorkflowMetadata;
-import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -48,7 +47,7 @@ class GitHubConfigurationTests {
             var verified = queries.verifyAccess(new VerifyAccessQuery(CONTEXT, Set.of(TARGET)));
             assertEquals(CONTEXT, verified.context());
             assertEquals(NOW, verified.observedAt());
-            assertEquals(new GitHubViews.RepositoryAccess(true, true, false), verified.repositories().get(TARGET));
+            assertEquals(new GitHubViews.RepositoryAccess(true, true, false, "account-3"), verified.repositories().get(TARGET));
             ports.actualUser = "another-user";
             var failure = assertThrows(GitHubAccessFailure.class,
                     () -> queries.verifyAccess(new VerifyAccessQuery(CONTEXT, Set.of(TARGET))));
@@ -58,14 +57,10 @@ class GitHubConfigurationTests {
 
     @ParameterizedTest
     @ValueSource(classes = {CurrentGitHubLink.class, InstallationAdmission.class, ReadOnlyGitHub.class})
-    void missingEachProductionPortFailsStartupWithThatExactDependency(Class<?> missingPort) {
+    void missingEachProductionPortLeavesProtectedQueryBackendUnavailable(Class<?> missingPort) {
         withPorts(new SyntheticPorts(), missingPort).run(context -> {
-            Throwable cause = context.getStartupFailure();
-            assertNotNull(cause);
-            while (cause.getCause() != null) { cause = cause.getCause(); }
-            assertEquals(NoSuchBeanDefinitionException.class, cause.getClass());
-            var missing = assertInstanceOf(NoSuchBeanDefinitionException.class, cause);
-            assertEquals(missingPort, missing.getBeanType());
+            assertNull(context.getStartupFailure());
+            assertEquals(0, context.getBeansOfType(GitHubQueries.class).size());
         });
     }
 

@@ -1,0 +1,5 @@
+*
+!target/
+target/*
+!target/pipesor-ingestion-normalization-service-0.1.0-SNAPSHOT.jar
+!Dockerfile

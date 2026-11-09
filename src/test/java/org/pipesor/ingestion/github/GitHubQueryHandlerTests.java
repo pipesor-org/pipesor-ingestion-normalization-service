@@ -61,7 +61,7 @@ class GitHubQueryHandlerTests {
         f.link = link(ctx, "github-82", "revision-6");
         var result = f.handler.verifyAccess(new VerifyAccessQuery(ctx, Set.of(FIRST)));
         assertEquals(ctx, result.context());
-        assertEquals(new GitHubViews.RepositoryAccess(true, true, false), result.repositories().get(FIRST));
+        assertEquals(new GitHubViews.RepositoryAccess(true, true, false, "acct-one"), result.repositories().get(FIRST));
         assertEquals(subject, f.admissions.getFirst().identity().link().subjectRef());
     }
 
@@ -132,7 +132,7 @@ class GitHubQueryHandlerTests {
         assertEquals("Nightly", selected.workflow().name());
         assertEquals(".github/workflows/nightly.yaml", selected.workflow().file());
         assertEquals(REGISTER, selected.access().context());
-        assertEquals(new GitHubViews.RepositoryAccess(true, true, true), selected.access().repositories().get(SECOND));
+        assertEquals(new GitHubViews.RepositoryAccess(true, true, true, "acct-two"), selected.access().repositories().get(SECOND));
         f.facts.put(SECOND, facts(SECOND, true, true, true, true, false));
         var nonAdministrator = f.handler.selectWorkflow(new SelectWorkflowQuery(REGISTER, SECOND, "93"));
         assertTrue(nonAdministrator.access().repositories().get(SECOND).readable());

@@ -8,6 +8,7 @@ import org.pipesor.ingestion.github.application.queryhandlers.GitHubQueryHandler
 import org.pipesor.ingestion.github.application.services.GitHubQueries;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.ObjectProvider;
 
 @Configuration(proxyBeanMethods = false)
 public class GitHubConfiguration {
@@ -15,8 +16,12 @@ public class GitHubConfiguration {
     Clock githubClock() { return Clock.systemUTC(); }
 
     @Bean
-    GitHubQueries githubQueries(CurrentGitHubLink links, InstallationAdmission admission,
-                                ReadOnlyGitHub github, Clock clock) {
-        return new GitHubQueryHandler(links, admission, github, clock);
+    GitHubQueries githubQueries(ObjectProvider<CurrentGitHubLink> links, ObjectProvider<InstallationAdmission> admission,
+                                ObjectProvider<ReadOnlyGitHub> github, Clock clock) {
+        var currentLinks = links.getIfAvailable();
+        var currentAdmission = admission.getIfAvailable();
+        var provider = github.getIfAvailable();
+        if (currentLinks == null || currentAdmission == null || provider == null) { return null; }
+        return new GitHubQueryHandler(currentLinks, currentAdmission, provider, clock);
     }
 }
