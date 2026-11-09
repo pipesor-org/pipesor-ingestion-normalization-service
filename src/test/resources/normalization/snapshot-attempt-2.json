@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1.0",
+  "eventId": "41be428e-b689-4f00-9277-000000000002",
+  "eventType": "execution.snapshot",
+  "source": "github_actions",
+  "occurredAt": "2026-11-08T09:20:31.123456789Z",
+  "sourceUpdatedAt": "2026-11-08T09:20:40.987654321Z",
+  "correlationId": "ci-investigation-204",
+  "pipeline": {
+    "githubRepositoryId": "92233720368547758081234567",
+    "githubWorkflowId": "184467440737095516170"
+  },
+  "execution": {
+    "githubRunId": "999999999999999999999999999",
+    "runAttempt": 2,
+    "branch": "feature/[redacted]",
+    "status": "completed",
+    "conclusion": "timed_out",
+    "startedAt": "2026-11-08T09:00:00Z",
+    "completedAt": "2026-11-08T09:20:00Z"
+  },
+  "commit": {
+    "sha": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  },
+  "service": null,
+  "environment": null,
+  "stages": [
+    {
+      "stage": "TESTING",
+      "status": "completed",
+      "startedAt": "2026-11-08T09:00:00Z",
+      "completedAt": "2026-11-08T09:20:00Z"
+    },
+    {
+      "stage": "INFRASTRUCTURE",
+      "status": "completed",
+      "startedAt": "2026-11-08T09:00:00Z",
+      "completedAt": "2026-11-08T09:20:00Z"
+    }
+  ],
+  "failure": {
+    "stage": "INFRASTRUCTURE",
+    "summary": "Failure [redacted]",
+    "detectedAt": "2026-11-08T09:19:59Z"
+  }
+}

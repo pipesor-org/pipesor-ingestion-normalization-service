@@ -1,0 +1,17 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: false
+  sql:
+    init:
+      mode: never
+logging:
+  level:
+    org.hibernate.orm.jdbc.error: OFF
+    org.hibernate.orm.jdbc.warn: OFF
+    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: OFF
+    org.hibernate.SQL: OFF
+    org.hibernate.orm.jdbc.bind: OFF
