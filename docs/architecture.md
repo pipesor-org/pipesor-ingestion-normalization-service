@@ -174,3 +174,9 @@ Final local adapter verification: README `clean verify` passed 236 tests with no
 ## Private credential boundaries
 
 Private OAuth token transport and Key Vault pair/PKCE custody now implement the locally accepted protocol independently of the servlet API. Ports remain in application and Azure/HTTP/JSON code stays in infrastructure. Exact-version owner/vault validation and complete pair storage do not substitute for current user authorization, restoration safety or the durable lifecycle executor. No new table, cross-service write or runtime endpoint is introduced. See [private credential adapter constraints](deployment-contract.md#local-private-credential-adapters); browser/admission/recovery gates continue to block their dependent execution.
+
+## Private refresh execution
+
+The one-shot refresh executor coordinates the integrated metadata, custody and OAuth boundaries. It checks connection identity before mutation, takes the exact active credential version from a short SQL snapshot and requires durable claim/send markers before remote refresh. Conditional activation retains the existing generation/revision guards; no network call belongs inside a metadata transaction. Late exact custody acknowledgements are retained without overriding a disconnect or expired operation.
+
+The executor is private and uncomposed. Browser completion, current GitHub authorization, operational restore safety and terminal cleanup/reconciliation are still separate gates. In particular, a nonterminal refresh excludes use of the previous pair even while its generation row is ACTIVE. This adds neither a Pipeline capability decision nor an HTTP refresh endpoint.
