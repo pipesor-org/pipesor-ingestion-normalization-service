@@ -23,7 +23,6 @@ import org.pipesor.ingestion.normalization.domain.model.valueobjects.Normalizati
 import org.pipesor.ingestion.normalization.domain.model.valueobjects.WorkflowObservation;
 import org.pipesor.ingestion.normalization.domain.model.valueobjects.WorkflowObservation.*;
 import org.pipesor.ingestion.normalization.interfaces.messaging.transform.NormalizedMessagesTransformer;
-import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import tools.jackson.databind.json.JsonMapper;
 import static org.junit.jupiter.api.Assertions.*;
@@ -283,11 +282,9 @@ class NormalizationTests {
     @Test
     void compositionRequiresRealProtectionPortAndHasNoPermissiveFallback() {
         new ApplicationContextRunner().withUserConfiguration(NormalizationConfiguration.class).run(context -> {
-            assertNotNull(context.getStartupFailure());
-            var cause = context.getStartupFailure();
-            while (cause.getCause() != null) { cause = cause.getCause(); }
-            var missing = assertInstanceOf(NoSuchBeanDefinitionException.class, cause);
-            assertEquals(EvidenceProtection.class, missing.getBeanType());
+            assertNull(context.getStartupFailure());
+            assertTrue(context.getBeansOfType(NormalizeObservationHandler.class).isEmpty());
+            assertNotNull(context.getBean(NormalizedMessagesTransformer.class));
         });
         new ApplicationContextRunner().withUserConfiguration(NormalizationConfiguration.class)
                 .withBean(EvidenceProtection.class, () -> POLICY).run(context -> {

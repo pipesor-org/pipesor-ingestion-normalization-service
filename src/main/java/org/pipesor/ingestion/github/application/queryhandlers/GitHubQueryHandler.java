@@ -60,7 +60,7 @@ public final class GitHubQueryHandler implements GitHubQueries {
             if (admitted(identity, facts) && facts.readable()) { visible.add(view(facts)); }
         }
         recheck(identity);
-        return new GitHubViews.Repositories(query.context(), identity.link().githubUserId(), visible);
+        return new GitHubViews.Repositories(query.context(), identity.link(), clock.instant(), visible);
     }
 
     @Override
@@ -76,7 +76,7 @@ public final class GitHubQueryHandler implements GitHubQueries {
             }
         }
         recheck(identity);
-        return new GitHubViews.Workflows(identity.context(), identity.link().githubUserId(), view(repository), workflows);
+        return new GitHubViews.Workflows(identity.context(), identity.link(), clock.instant(), view(repository), workflows);
     }
 
     @Override
@@ -91,7 +91,7 @@ public final class GitHubQueryHandler implements GitHubQueries {
         }
         recheck(identity);
         return new GitHubViews.Selection(access(identity, Map.of(query.repository(),
-                new GitHubViews.RepositoryAccess(true, true, repository.administrator()))), view(repository), workflow);
+                new GitHubViews.RepositoryAccess(true, true, repository.administrator(), repository.accountId()))), view(repository), workflow);
     }
 
     private ReadOnlyGitHub.Identity begin(AccessContext context) {
@@ -131,7 +131,7 @@ public final class GitHubQueryHandler implements GitHubQueries {
         boolean admitted = admitted(identity, facts);
         boolean readable = admitted && facts.readable();
         boolean administrator = readable && facts.administrator();
-        return new GitHubViews.RepositoryAccess(admitted, readable, administrator);
+        return new GitHubViews.RepositoryAccess(admitted, readable, administrator, readable ? facts.accountId() : null);
     }
 
     private boolean admitted(ReadOnlyGitHub.Identity identity, RepositoryFacts facts) {
@@ -141,7 +141,7 @@ public final class GitHubQueryHandler implements GitHubQueries {
 
     private GitHubViews.Access access(ReadOnlyGitHub.Identity identity,
                                       Map<RepositoryTarget, GitHubViews.RepositoryAccess> targets) {
-        return new GitHubViews.Access(identity.context(), identity.link().githubUserId(), targets, clock.instant());
+        return new GitHubViews.Access(identity.context(), identity.link(), targets, clock.instant());
     }
 
     private GitHubViews.Repository view(RepositoryFacts facts) {

@@ -8,6 +8,7 @@ import org.pipesor.ingestion.capture.infrastructure.messaging.NormalizedOutputEn
 import org.pipesor.ingestion.capture.infrastructure.persistence.jpa.JpaCaptureLedger;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.orm.jpa.SharedEntityManagerCreator;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -18,7 +19,9 @@ public class CapturePersistenceConfiguration {
         return new JpaCaptureLedger(SharedEntityManagerCreator.createSharedEntityManager(factory), manager, encoder);
     }
     @Bean ProtectedMessageEncoder protectedMessageEncoder() { return new NormalizedOutputEncoder(); }
-    @Bean CaptureHandler captureHandler(CaptureLedger ledger, CurrentMachineScope scope,
+    @Bean
+    @ConditionalOnProperty(name = "ingestion.capture.enabled", havingValue = "true")
+    CaptureHandler captureHandler(CaptureLedger ledger, CurrentMachineScope scope,
             BrokerPublisher publisher, Clock clock) {
         return new CaptureHandler(ledger, scope, publisher, clock);
     }

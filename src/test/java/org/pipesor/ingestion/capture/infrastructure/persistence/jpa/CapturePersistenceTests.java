@@ -95,7 +95,7 @@ class CapturePersistenceTests {
         context = new SpringApplicationBuilder(TestConfiguration.class).web(WebApplicationType.NONE)
                 .properties("spring.datasource.url=" + postgres.getJdbcUrl(), "spring.datasource.username=" + postgres.getUsername(),
                         "spring.datasource.password=" + postgres.getPassword(), "spring.jpa.hibernate.ddl-auto=validate", "spring.flyway.enabled=false")
-                .run();
+                .run("--ingestion.capture.enabled=true");
         ledger = context.getBean(CaptureLedger.class); handler = context.getBean(CaptureHandler.class);
         clock = (MutableClock) context.getBean(Clock.class); authorization = context.getBean(ScopeDouble.class); broker = context.getBean(BrokerDouble.class);
     }
