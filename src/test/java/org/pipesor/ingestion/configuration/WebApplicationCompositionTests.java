@@ -12,6 +12,7 @@ import org.pipesor.ingestion.capture.application.ports.BrokerPublisher;
 import org.pipesor.ingestion.capture.application.ports.CaptureLedger;
 import org.pipesor.ingestion.github.application.services.GitHubQueries;
 import org.pipesor.ingestion.github.application.ports.GitHubUserTokens;
+import org.pipesor.ingestion.github.application.ports.ReadOnlyGitHub;
 import org.pipesor.ingestion.github.application.commandhandlers.RefreshHandler;
 import org.pipesor.ingestion.github.application.ports.GitHubCredentialCustody;
 import org.pipesor.ingestion.normalization.application.commandhandlers.NormalizeObservationHandler;
@@ -48,7 +49,7 @@ class WebApplicationCompositionTests {
                     "--ingestion.api.limits.max-response-bytes=8192", "--ingestion.api.limits.max-context-length=128")) {
                 assertNotNull(context.getBean(CaptureLedger.class));
                 for (var absent : new Class<?>[] { CaptureHandler.class, BrokerPublisher.class, GitHubQueries.class,
-                        NormalizeObservationHandler.class, EvidenceProtection.class, GitHubUserTokens.class, GitHubCredentialCustody.class, RefreshHandler.class }) {
+                        NormalizeObservationHandler.class, EvidenceProtection.class, GitHubUserTokens.class, GitHubCredentialCustody.class, RefreshHandler.class, ReadOnlyGitHub.class }) {
                     assertTrue(context.getBeansOfType(absent).isEmpty(), absent.getName());
                 }
                 int port = ((WebServerApplicationContext) context).getWebServer().getPort();

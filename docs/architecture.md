@@ -180,3 +180,9 @@ Private OAuth token transport and Key Vault pair/PKCE custody now implement the 
 The one-shot refresh executor coordinates the integrated metadata, custody and OAuth boundaries. It checks connection identity before mutation, takes the exact active credential version from a short SQL snapshot and requires durable claim/send markers before remote refresh. Conditional activation retains the existing generation/revision guards; no network call belongs inside a metadata transaction. Late exact custody acknowledgements are retained without overriding a disconnect or expired operation.
 
 The executor is private and uncomposed. Browser completion, current GitHub authorization, operational restore safety and terminal cleanup/reconciliation are still separate gates. In particular, a nonterminal refresh excludes use of the previous pair even while its generation row is ACTIVE. This adds neither a Pipeline capability decision nor an HTTP refresh endpoint.
+
+## GitHub read-provider boundary
+
+The provider implementation consumes GitHub's user/App intersection and actual user identity through read-only REST operations. Installation suspension, App/account identity, user permissions, SSO-required/partial results and complete pagination are checked at that boundary. Workflow metadata is linked to the repository proven by those reads; public repository metadata does not establish authorization. The provider supplies facts without registering Pipeline objects or deciding AIOps capabilities.
+
+Private credential supply remains a separate operational gate: it must bind the exact generation, reject nonterminal refresh and honor restore/admission rules before this provider can be composed. No operational credential reader or new HTTP contract is added by the provider implementation.
