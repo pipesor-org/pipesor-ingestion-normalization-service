@@ -186,3 +186,8 @@ The executor is private and uncomposed. Browser completion, current GitHub autho
 The provider implementation consumes GitHub's user/App intersection and actual user identity through read-only REST operations. Installation suspension, App/account identity, user permissions, SSO-required/partial results and complete pagination are checked at that boundary. Workflow metadata is linked to the repository proven by those reads; public repository metadata does not establish authorization. The provider supplies facts without registering Pipeline objects or deciding AIOps capabilities.
 
 Private credential supply remains a separate operational gate: it must bind the exact generation, reject nonterminal refresh and honor restore/admission rules before this provider can be composed. No operational credential reader or new HTTP contract is added by the provider implementation.
+
+
+## Publication execution
+
+An application worker now connects bounded ready-receipt discovery to the existing publication phase operation. Its advisory cursor avoids starvation by repeatedly failing receipts without granting a claim or changing durable identity. The external SQL selector and opt-in managed runner preserve framework-free application code; the ledger still owns claims, leases, retries and output confirmation. No schema or message contract changes are introduced. See [runtime requirements and limitations](deployment-contract.md#durable-publication-worker); production source scope, provider identity and operational capacity remain distinct activation inputs.
