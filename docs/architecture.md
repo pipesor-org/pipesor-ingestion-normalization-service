@@ -191,3 +191,14 @@ Private credential supply remains a separate operational gate: it must bind the 
 ## Publication execution
 
 An application worker now connects bounded ready-receipt discovery to the existing publication phase operation. Its advisory cursor avoids starvation by repeatedly failing receipts without granting a claim or changing durable identity. The external SQL selector and opt-in managed runner preserve framework-free application code; the ledger still owns claims, leases, retries and output confirmation. No schema or message contract changes are introduced. See [runtime requirements and limitations](deployment-contract.md#durable-publication-worker); production source scope, provider identity and operational capacity remain distinct activation inputs.
+
+
+## Machine-source authentication and durable webhook entry
+
+The machine transport now verifies the actual App, installation/account, narrowed read-only token and selected workflow/run attempt. Jobs/steps/logs remain private raw source data; exact original timestamps and correlation are retained, and changed source versions, unsupported log encodings or unavailable authority fail closed. No user token is substituted for machine capture. Signed log downloads use a separate credential-free request to approved hosts.
+
+The operator-owned configuration and Key Vault Secrets usage for App signing/webhook material were explicitly approved locally on 2026-11-10. File snapshots supply current machine scope and tenant installation admission; they do not register Pipeline objects/grants or certify restored personal connections. Private RS256 signing and exact-version custody add no key generation, installation, resource or permission capability.
+
+The approved opt-in webhook endpoint verifies HMAC before parsing, resolves scope independently and commits a minimized receipt before returning selected-delivery success. It neither persists raw bodies nor treats a signature as authority to read repositories. Timeouts may leave a committed receipt with an unknown acknowledgement; durable body identity and delivery-conflict rules remain authoritative. Bounded concurrent work and a managed timer protect the public edge without changing the human Entra boundary or making OpenAPI public.
+
+The pilot is this repository's Verify workflow, completed actions only; live resources do not yet exist. Stage/excerpt attribution and preparation orchestration remain gated by reviewed source mapping, while browser continuity and restore/cleanup retain their separate decisions. CI was deferred by the user and was not worked on in this increment.

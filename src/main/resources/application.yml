@@ -17,6 +17,10 @@ springdoc:
   swagger-ui:
     enabled: false
 ingestion:
+  github-machine:
+    enabled: false
+  github-webhook:
+    enabled: false
   publication-worker:
     enabled: false
   capture:
