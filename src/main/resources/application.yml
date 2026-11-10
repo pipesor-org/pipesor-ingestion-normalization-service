@@ -17,6 +17,8 @@ springdoc:
   swagger-ui:
     enabled: false
 ingestion:
+  publication-worker:
+    enabled: false
   capture:
     enabled: false
   messaging:

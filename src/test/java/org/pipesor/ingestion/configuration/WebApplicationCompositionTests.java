@@ -8,6 +8,8 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.pipesor.ingestion.IngestionServiceApplication;
 import org.pipesor.ingestion.capture.application.commandhandlers.CaptureHandler;
+import org.pipesor.ingestion.capture.application.commandhandlers.PublicationWorker;
+import org.pipesor.ingestion.capture.infrastructure.scheduling.PublicationRunner;
 import org.pipesor.ingestion.capture.application.ports.BrokerPublisher;
 import org.pipesor.ingestion.capture.application.ports.CaptureLedger;
 import org.pipesor.ingestion.github.application.services.GitHubQueries;
@@ -49,7 +51,7 @@ class WebApplicationCompositionTests {
                     "--ingestion.api.limits.max-response-bytes=8192", "--ingestion.api.limits.max-context-length=128")) {
                 assertNotNull(context.getBean(CaptureLedger.class));
                 for (var absent : new Class<?>[] { CaptureHandler.class, BrokerPublisher.class, GitHubQueries.class,
-                        NormalizeObservationHandler.class, EvidenceProtection.class, GitHubUserTokens.class, GitHubCredentialCustody.class, RefreshHandler.class, ReadOnlyGitHub.class }) {
+                        NormalizeObservationHandler.class, EvidenceProtection.class, GitHubUserTokens.class, GitHubCredentialCustody.class, RefreshHandler.class, ReadOnlyGitHub.class, PublicationWorker.class, PublicationRunner.class }) {
                     assertTrue(context.getBeansOfType(absent).isEmpty(), absent.getName());
                 }
                 int port = ((WebServerApplicationContext) context).getWebServer().getPort();
