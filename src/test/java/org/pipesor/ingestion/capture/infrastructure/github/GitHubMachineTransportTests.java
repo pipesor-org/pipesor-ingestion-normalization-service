@@ -31,7 +31,7 @@ class GitHubMachineTransportTests {
     final GitHubMachineCapture.Request request=new GitHubMachineCapture.Request(scope,RUN,3,"corr-machine-92");
     HttpServer server;ExecutorService executor;URI root;HttpClient real;
     AtomicInteger runReads=new AtomicInteger(),calls=new AtomicInteger(),mintCalls=new AtomicInteger(),scopeCalls=new AtomicInteger();
-    volatile String mode="ok",mintBody;volatile boolean fenced;final AtomicInteger afterFenceChecks=new AtomicInteger();volatile Instant now=NOW;volatile int loseScopeAt=Integer.MAX_VALUE;volatile HttpRequest download;
+    volatile String mode="ok",mintBody;volatile boolean fenced;final AtomicInteger afterFenceChecks=new AtomicInteger();volatile Instant now=NOW;volatile int loseScopeAt=Integer.MAX_VALUE;volatile HttpRequest download;volatile byte[] archive;
     final Clock clock=new Clock(){public ZoneId getZone(){return ZoneOffset.UTC;}public Clock withZone(ZoneId z){return this;}public Instant instant(){return now;}};
     static final JsonMapper JSON=JsonMapper.builder().build();
     @BeforeEach void start() throws Exception {
@@ -49,7 +49,7 @@ class GitHubMachineTransportTests {
             else if(mint)body="{\"token\":\"private-install-token\",\"expires_at\":\"2026-11-10T12:03:00Z\",\"permissions\":{\"actions\":\""+(mode.equals("write")?"write":"read")+"\",\"metadata\":\"read\"}}";
             else if(path.equals("/installation/repositories"))body="{\"total_count\":"+(mode.equals("wide-token")?2:1)+",\"repositories\":["+repo()+"]}";
             else if(path.equals("/repos/org/project")){fenced=true;body=mode.equals("replacement")?repo().replace(REPO,"999"):repo();}
-            else if(path.endsWith("/jobs/701/logs")){status=302;body="";e.getResponseHeaders().add("Location",mode.equals("evil-download")?"https://evil.example/log?private-link":"https://logs.example/log?private-link");}
+            else if(path.endsWith("/jobs/701/logs")||path.endsWith("/attempts/3/logs")){status=302;body="";e.getResponseHeaders().add("Location",mode.equals("evil-download")?"https://evil.example/log?private-link":"https://logs.example/log?private-link");}
             else if(path.endsWith("/jobs/701"))body=job("701",1);
             else if(path.endsWith("/jobs")) {
                 int page=e.getRequestURI().getRawQuery().contains("page=2")?2:1;
@@ -76,20 +76,21 @@ class GitHubMachineTransportTests {
     String repo(){return "{\"id\":"+REPO+",\"full_name\":\"org/project\",\"owner\":{\"id\":"+(mode.equals("wrong-owner")?"241":ACCOUNT)+"}}";}
     String run(){return "{\"id\":"+RUN+",\"workflow_id\":"+(mode.equals("wrong-workflow")?"591":WORKFLOW)+",\"run_attempt\":"+(mode.equals("wrong-attempt")?4:3)+",\"repository\":"+repo()+",\"head_branch\":\"release/candidate\",\"head_sha\":\""+"a".repeat(40)+"\",\"status\":\"completed\",\"conclusion\":\"failure\",\"created_at\":\"2026-11-10T11:00:00.123456789Z\",\"updated_at\":\"2026-11-10T11:03:00.987654321Z\",\"run_started_at\":\"2026-11-10T11:01:00Z\"}";}
     String job(String id,int number){return "{\"id\":"+id+",\"run_id\":"+(mode.equals("wrong-job-run")?"681":RUN)+",\"run_attempt\":3,\"name\":\"job-"+number+"\",\"status\":\"completed\",\"conclusion\":\"failure\",\"started_at\":null,\"completed_at\":null,\"steps\":[{\"number\":"+number+",\"name\":\"step-"+number+"\",\"status\":\"completed\",\"conclusion\":\"failure\",\"started_at\":null,\"completed_at\":null}]}";}
-    GitHubMachineTransport adapter(int bytes,Duration budget,boolean fakeDownload){
+    GitHubMachineTransport adapter(int bytes,Duration budget,boolean fakeDownload){return adapter(bytes,budget,fakeDownload,null);}
+    GitHubMachineTransport adapter(int bytes,Duration budget,boolean fakeDownload,GitHubMachineTransport.ArchiveLimits limits){
         HttpClient client=real;
         if(fakeDownload){
             client=mock(HttpClient.class);when(client.followRedirects()).thenReturn(HttpClient.Redirect.NEVER);
             when(client.sendAsync(any(HttpRequest.class),any(HttpResponse.BodyHandler.class))).thenAnswer(inv->{
                 HttpRequest req=inv.getArgument(0);
                 if(req.uri().getScheme().equals("https")){
-                    download=req;var result=mock(HttpResponse.class);when(result.statusCode()).thenReturn(200);when(result.body()).thenReturn(mode.equals("invalid-utf8")?new byte[]{(byte)0xc3,0x28}:"private-raw-log α😀\nline2".getBytes(StandardCharsets.UTF_8));
-                    var headers=new HashMap<String,List<String>>();headers.put("Content-Type",List.of(mode.equals("non-utf8-charset")?"text/plain;charset=iso-8859-1":"text/plain;charset=UTF-8"));if(mode.equals("encoded-log"))headers.put("Content-Encoding",List.of("gzip"));when(result.headers()).thenReturn(HttpHeaders.of(headers,(a,b)->true));return CompletableFuture.completedFuture(result);
+                    download=req;var result=mock(HttpResponse.class);when(result.statusCode()).thenReturn(200);when(result.body()).thenReturn(archive!=null?archive:mode.equals("invalid-utf8")?new byte[]{(byte)0xc3,0x28}:"private-raw-log α😀\nline2".getBytes(StandardCharsets.UTF_8));
+                    var headers=new HashMap<String,List<String>>();headers.put("Content-Type",List.of(archive!=null?"application/zip":mode.equals("non-utf8-charset")?"text/plain;charset=iso-8859-1":"text/plain;charset=UTF-8"));if(mode.equals("encoded-log"))headers.put("Content-Encoding",List.of("gzip"));when(result.headers()).thenReturn(HttpHeaders.of(headers,(a,b)->true));return CompletableFuture.completedFuture(result);
                 }
                 return real.sendAsync(req,inv.getArgument(1));
             });
         }
-        return new GitHubMachineTransport(client,root,s->{assertFalse(TransactionSynchronizationManager.isActualTransactionActive());if(mode.equals("expire-final-scope")&&fenced&&afterFenceChecks.incrementAndGet()>=2)now=NOW.plusSeconds(300);return scopeCalls.incrementAndGet()>=loseScopeAt?CurrentMachineScope.Decision.CHANGED_OR_LOST:CurrentMachineScope.Decision.AUTHORIZED;},()->new GitHubMachineTransport.AppJwt(APP,"private-app-jwt",NOW.plusSeconds(30)),APP,"2026-03-10",budget,1,4,5,bytes,1024,Set.of("logs.example"),clock);
+        return new GitHubMachineTransport(client,root,s->{assertFalse(TransactionSynchronizationManager.isActualTransactionActive());if(mode.equals("expire-final-scope")&&fenced&&afterFenceChecks.incrementAndGet()>=2)now=NOW.plusSeconds(300);return scopeCalls.incrementAndGet()>=loseScopeAt?CurrentMachineScope.Decision.CHANGED_OR_LOST:CurrentMachineScope.Decision.AUTHORIZED;},()->new GitHubMachineTransport.AppJwt(APP,"private-app-jwt",NOW.plusSeconds(30)),APP,"2026-03-10",budget,1,4,5,bytes,1024,limits,Set.of("logs.example"),clock);
     }
     GitHubMachineTransport adapter(){return adapter(16000,Duration.ofSeconds(3),false);}
     @Test void mintsOnlyReadOnlySingleRepositoryTokenAndPreservesAttemptJobsAndTimestamps(CapturedOutput output){
@@ -114,5 +115,30 @@ class GitHubMachineTransportTests {
         loseScopeAt=scopeCalls.get()+3;failure(SCOPE_CHANGED,()->adapter().readRun(request));assertEquals(1,calls.get());assertEquals(0,mintCalls.get());
     }
     @Test void enforcesAggregateBytesAndFullResponseDeadline(){failure(UNAVAILABLE,()->adapter(20,Duration.ofSeconds(3),false).readRun(request));mode="timeout";assertTimeoutPreemptively(Duration.ofSeconds(2),()->failure(UNAVAILABLE,()->adapter(16000,Duration.ofMillis(100),false).readRun(request)));}
+    byte[] zip(Map<String,byte[]> entries) throws Exception {
+        var bytes=new java.io.ByteArrayOutputStream();try(var zip=new java.util.zip.ZipOutputStream(bytes)){for(var entry:entries.entrySet()){zip.putNextEntry(new java.util.zip.ZipEntry(entry.getKey()));zip.write(entry.getValue());zip.closeEntry();}}return bytes.toByteArray();
+    }
+    GitHubMachineTransport archiveAdapter(int compressed,int expanded,int entries,int step){return adapter(16000,Duration.ofSeconds(3),true,new GitHubMachineTransport.ArchiveLimits(compressed,expanded,entries,step));}
+    @Test void bindsPerStepArchiveToActualAttemptAndKeepsAggregatePrivate(CapturedOutput output) throws Exception {
+        archive=zip(Map.of("0_job-1.txt","aggregate-never-step".getBytes(StandardCharsets.UTF_8),"job-1/1_step-1.txt","2026-11-10T11:01:03Z phase α".getBytes(StandardCharsets.UTF_8),"job-2/2_step-2.txt","different step 😀".getBytes(StandardCharsets.UTF_8)));
+        var result=archiveAdapter(4096,4096,8,1024).readStepLogs(request);
+        assertEquals(request,result.run().request());assertEquals(2,result.logs().size());var first=result.logs().stream().filter(l->l.jobId().equals("701")).findFirst().orElseThrow();assertEquals(1,first.stepNumber());assertEquals("2026-11-10T11:01:03Z phase α",new String(first.bytes(),StandardCharsets.UTF_8));
+        var copy=first.bytes();copy[0]=0;assertEquals('2',first.bytes()[0]);assertThrows(UnsupportedOperationException.class,()->result.logs().clear());assertTrue(download.headers().map().isEmpty());assertFalse(output.getAll().contains("phase α"));assertFalse(first.toString().contains("phase"));assertEquals(3,runReads.get());
+    }
+    @ParameterizedTest @ValueSource(strings={"../escape.txt","job-1/../1_step-1.txt","job-1/2_step-1.txt","job-1/1_other-name.txt","unknown/1_step-1.txt","job-1\\1_step-1.txt"})
+    void rejectsUnprovenArchivePathsWithoutReturningAnyEvidence(String path) throws Exception {archive=zip(Map.of(path,"private archive".getBytes(StandardCharsets.UTF_8)));failure(UNAVAILABLE,()->archiveAdapter(4096,4096,8,1024).readStepLogs(request));}
+    @Test void refusesCompressionExpansionEntryAndStepBudgets() throws Exception {
+        archive=zip(Map.of("job-1/1_step-1.txt",new byte[8192]));
+        failure(UNAVAILABLE,()->archiveAdapter(archive.length-1,16384,8,8192).readStepLogs(request));failure(UNAVAILABLE,()->archiveAdapter(4096,4096,8,4096).readStepLogs(request));failure(UNAVAILABLE,()->archiveAdapter(4096,16384,8,1024).readStepLogs(request));
+        archive=zip(Map.of("job-1/1_step-1.txt",new byte[1],"job-2/2_step-2.txt",new byte[1]));failure(UNAVAILABLE,()->archiveAdapter(4096,4096,1,1024).readStepLogs(request));
+    }
+    @Test void refusesInvalidUtf8TruncationAndDuplicateArchiveIdentity() throws Exception {
+        archive=zip(Map.of("job-1/1_step-1.txt",new byte[]{(byte)0xc3,0x28}));failure(UNAVAILABLE,()->archiveAdapter(4096,4096,8,1024).readStepLogs(request));
+        archive=zip(Map.of("job-1/1_step-1.txt","ok".getBytes(StandardCharsets.UTF_8)));archive=Arrays.copyOf(archive,archive.length-22);failure(UNAVAILABLE,()->archiveAdapter(4096,4096,8,1024).readStepLogs(request));
+        archive=zip(Map.of("job-1/1_step-1.txt",new byte[1],"job-2/2_step-2.txt",new byte[1]));var from="job-2/2_step-2.txt".getBytes(StandardCharsets.UTF_8);var to="job-1/1_step-1.txt".getBytes(StandardCharsets.UTF_8);for(int i=0;i<=archive.length-from.length;i++){boolean match=true;for(int j=0;j<from.length;j++)if(archive[i+j]!=from[j]){match=false;break;}if(match)System.arraycopy(to,0,archive,i,to.length);}failure(UNAVAILABLE,()->archiveAdapter(4096,4096,8,1024).readStepLogs(request));
+    }
+    @Test void fencesArchiveSourceAndRefusesMissingArchiveConfiguration() throws Exception {
+        failure(INVALID_STATE,()->adapter().readStepLogs(request));assertEquals(0,calls.get());archive=zip(Map.of("job-1/1_step-1.txt","ok".getBytes(StandardCharsets.UTF_8)));mode="changed-after-log";failure(UNAVAILABLE,()->archiveAdapter(4096,4096,8,1024).readStepLogs(request));
+    }
     void failure(CaptureFailure.Reason reason,org.junit.jupiter.api.function.Executable action){assertEquals(reason,assertThrowsExactly(CaptureFailure.class,action).reason());}
 }

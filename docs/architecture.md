@@ -202,3 +202,10 @@ The operator-owned configuration and Key Vault Secrets usage for App signing/web
 The approved opt-in webhook endpoint verifies HMAC before parsing, resolves scope independently and commits a minimized receipt before returning selected-delivery success. It neither persists raw bodies nor treats a signature as authority to read repositories. Timeouts may leave a committed receipt with an unknown acknowledgement; durable body identity and delivery-conflict rules remain authoritative. Bounded concurrent work and a managed timer protect the public edge without changing the human Entra boundary or making OpenAPI public.
 
 The pilot is this repository's Verify workflow, completed actions only; live resources do not yet exist. Stage/excerpt attribution and preparation orchestration remain gated by reviewed source mapping, while browser continuity and restore/cleanup retain their separate decisions. CI was deferred by the user and was not worked on in this increment.
+
+
+## Approved Verify preparation boundary
+
+The [locally approved profile](deployment-contract.md#verify-preparation-profile-v1--approved-locally) maps only the named pilot's proven step archive and explicit Maven phases. `VerifyPreparationProfile` returns private whitelisted observations; `PrepareGitHubCapture` coordinates the durable claim, source binding, mandatory protection, reserved IDs, encoded body limits and atomic ledger preparation. Domain/application remain independent of Spring, ZIP/HTTP, JPA and Azure; archive transport and opt-in composition stay in infrastructure/configuration. No Pipeline object, grant, execution transition or downstream schema is created or changed.
+
+The operation is explicit per receipt; automatic preparation dispatch/recovery is not implemented. Flags remain disabled, environment resources are absent, and local provider fixtures do not certify a live GitHub → preparation → broker flow. Log/Event, NLP, Correlation and Recommendation still need their receiving/authorization contracts enforced before claiming a safe integrated flow; human evidence and diagnosis access must not bypass repository restrictions.
