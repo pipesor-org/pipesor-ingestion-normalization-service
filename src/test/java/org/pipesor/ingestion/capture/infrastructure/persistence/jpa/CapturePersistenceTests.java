@@ -12,6 +12,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.postgresql.util.PSQLException;
 import org.pipesor.ingestion.capture.application.commandhandlers.CaptureHandler;
 import org.pipesor.ingestion.capture.application.commandhandlers.PrepareGitHubCapture;
+import org.pipesor.ingestion.capture.application.commandhandlers.PreparationWorker;
+import org.springframework.orm.jpa.SharedEntityManagerCreator;
+import jakarta.persistence.EntityManagerFactory;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.pipesor.ingestion.capture.application.services.VerifyPreparationProfile;
 import org.pipesor.ingestion.capture.infrastructure.messaging.NormalizedOutputEncoder;
 import org.pipesor.ingestion.normalization.infrastructure.protection.BoundedEvidenceProtection;
@@ -474,6 +478,70 @@ class CapturePersistenceTests {
         failure(SCOPE_CHANGED, () -> revokeOperation.prepare(new Claim(revoked.id(), UUID.randomUUID(), NOW.plusSeconds(30)), NOW.plusSeconds(120)));
         assertEquals("BLOCKED", ledger.receipt(revoked.id()).phase());
         assertEquals(0L, scalar("select count(*) from ingestion.capture_observations where origin_receipt_id=?", revoked.id()));
+    }
+
+    private PreparationReadyReceipts preparationReady() {
+        return new JpaPreparationReadyReceipts(SharedEntityManagerCreator.createSharedEntityManager(context.getBean(EntityManagerFactory.class)),
+                context.getBean(PlatformTransactionManager.class));
+    }
+    @Test void preparationDiscoveryUsesPhaseAndExactLeaseBoundaryWithoutReplayCutoff() {
+        var waiting = accept(); var leased = claim(accept()); var frozen = prepared(false); var blocked = accept();
+        ledger.blockReceipt(blocked.id(), NOW);
+        var ready = preparationReady();
+        var initial = ready.read(NOW, 5000, null);
+        assertTrue(initial.contains(waiting.id())); assertFalse(initial.contains(leased.id()));
+        assertFalse(initial.contains(frozen.id())); assertFalse(initial.contains(blocked.id()));
+        assertEquals(initial.stream().sorted(Comparator.comparing(UUID::toString)).toList(), initial);
+        assertEquals(1, ready.read(NOW, 1, null).size());
+        var later = ready.read(NOW.plusSeconds(30), 5000, null);
+        assertTrue(later.contains(leased.id()));
+        assertTrue(ready.read(NOW.plusSeconds(3601), 5000, null).contains(waiting.id()), "Replay window is not a processing deadline");
+        assertTrue(ready.read(NOW, 5000, waiting.id()).stream().allMatch(id -> id.toString().compareTo(waiting.id().toString()) > 0));
+        failure(INVALID_INPUT, () -> ready.read(NOW, 0, null));
+        new org.springframework.transaction.support.TransactionTemplate(context.getBean(PlatformTransactionManager.class))
+                .executeWithoutResult(status -> failure(INVALID_INPUT, () -> ready.read(NOW, 1, null)));
+    }
+    @Test void competingPreparationPassesReadSourceOnceAndFreezeOnePlan() throws Exception {
+        var receipt = pilotReceipt(); var barrier = new CyclicBarrier(2); var reads = new java.util.concurrent.atomic.AtomicInteger();
+        var operation = coordinator(request -> {
+            reads.incrementAndGet(); assertNotNull(ledger.receipt(receipt.id()).claimOwner());
+            return pilotLogs(receipt, true);
+        }, new BoundedEvidenceProtection("bounded-v1", 100000, 100000, 100), 120000);
+        PreparationReadyReceipts hints = (now, limit, after) -> {
+            try { barrier.await(5, java.util.concurrent.TimeUnit.SECONDS); }
+            catch (Exception error) { throw new AssertionError(error); }
+            return List.of(receipt.id());
+        };
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var passes = executor.invokeAll(List.<Callable<PreparationWorker.Result>>of(
+                    () -> new PreparationWorker(hints, operation, clock, 1, Duration.ofSeconds(10)).tick(UUID.randomUUID(), NOW.plusSeconds(30), NOW.plusSeconds(120)),
+                    () -> new PreparationWorker(hints, operation, clock, 1, Duration.ofSeconds(10)).tick(UUID.randomUUID(), NOW.plusSeconds(30), NOW.plusSeconds(120))));
+            var results = new ArrayList<PreparationWorker.Result>(); for (var pass : passes) { results.add(pass.get()); }
+            assertEquals(1, reads.get()); assertEquals(1, results.stream().mapToInt(PreparationWorker.Result::prepared).sum());
+            assertEquals(1, results.stream().mapToInt(PreparationWorker.Result::stale).sum());
+        }
+        var prepared = ledger.receipt(receipt.id()); assertEquals("PREPARED", prepared.phase());
+        assertEquals(2L, scalar("select count(*) from ingestion.publication_outputs where observation_id=?", prepared.observationId()));
+    }
+    @Test void failedSourcePassRetainsClaimAndAllowsLaterReceiptToPrepare(CapturedOutput captured) {
+        var receipts = new ArrayList<>(List.of(pilotReceipt(), pilotReceipt()));
+        receipts.sort(Comparator.comparing(receipt -> receipt.id().toString()));
+        var failed = receipts.getFirst(); var healthy = receipts.getLast(); var ids = Set.of(failed.id(), healthy.id());
+        var selector = preparationReady();
+        PreparationReadyReceipts isolated = (now, limit, after) -> selector.read(now, 5000, after).stream().filter(ids::contains).limit(limit).toList();
+        var reads = new ArrayList<String>();
+        var operation = coordinator(request -> {
+            reads.add(request.scope().captureDomain());
+            if (request.scope().equals(failed.scope())) { throw new IllegalStateException("private dispatch source token"); }
+            return pilotLogs(healthy, false);
+        }, input -> Optional.of(input), 120000);
+        var worker = new PreparationWorker(isolated, operation, clock, 1, Duration.ofSeconds(10));
+        assertEquals(1, worker.tick(UUID.randomUUID(), NOW.plusSeconds(30), NOW.plusSeconds(120)).unavailable());
+        assertEquals("ACCEPTED", ledger.receipt(failed.id()).phase());
+        assertEquals(NOW.plusSeconds(30), ledger.receipt(failed.id()).leaseUntil());
+        assertEquals(1, worker.tick(UUID.randomUUID(), NOW.plusSeconds(30), NOW.plusSeconds(120)).prepared());
+        assertEquals(List.of(failed.scope().captureDomain(), healthy.scope().captureDomain()), reads);
+        assertFalse(captured.getAll().contains("private dispatch source token"));
     }
 
 }

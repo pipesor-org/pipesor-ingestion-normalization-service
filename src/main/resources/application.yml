@@ -23,6 +23,8 @@ ingestion:
     enabled: false
   capture-preparation:
     enabled: false
+  preparation-worker:
+    enabled: false
   publication-worker:
     enabled: false
   capture:
