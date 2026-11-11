@@ -4,7 +4,7 @@ Ingestion and Normalization Service captures authorized workflow evidence, prote
 
 The [approved ADR-020 evolution](docs/architecture.md#approved-github-access-evolution) also assigns GitHub user connection, discovery and verified access/metadata to this service; DD-020 additionally records the locally approved metadata/custody design. Runtime identity, callback, admission, recovery and delivery inputs remain distinct from that approval.
 
-This repository contains a Java 25 / Spring Boot application with a servlet HTTP composition root, GitHub facts/discovery, PostgreSQL connector metadata, bounded evidence protection, normalized message preparation and an owned durable capture/publication ledger. Ingestion reports current admitted/readable/administrator facts; Pipeline owns registration, grants and the decision about AIOps capabilities. The HTTP boundary validates delegated Entra JWTs and caller channels; an opt-in Azure SDK publisher, local container recipe and verification-only CI are implemented. Private OAuth token transport and exact-version Key Vault custody are also implemented, without activating a connection executor. A private GitHub user/App read provider implements identity, repository discovery/access and workflow metadata. Machine capture now has opt-in file authority, exact-version App material custody, RS256 signing, installation-token reads and an authenticated durable webhook endpoint. The approved Verify pilot profile now classifies proven per-step source phases and an explicit receipt operation connects source reads, protection and durable preparation. Automatic preparation dispatch, browser connection and operational restore/cleanup remain pending. Pipeline owns the calling-side Entra OBO integration; this service validates its delegated tokens.
+This repository contains a Java 25 / Spring Boot application with a servlet HTTP composition root, GitHub facts/discovery, PostgreSQL connector metadata, bounded evidence protection, normalized message preparation and an owned durable capture/publication ledger. Ingestion reports current admitted/readable/administrator facts; Pipeline owns registration, grants and the decision about AIOps capabilities. The HTTP boundary validates delegated Entra JWTs and caller channels; an opt-in Azure SDK publisher, local container recipe and CI verification/main-candidate publication are implemented. Private OAuth token transport and exact-version Key Vault custody are also implemented, without activating a connection executor. A private GitHub user/App read provider implements identity, repository discovery/access and workflow metadata. Machine capture now has opt-in file authority, exact-version App material custody, RS256 signing, installation-token reads and an authenticated durable webhook endpoint. The legacy approved Verify pilot profile classifies proven per-step source phases and an explicit receipt operation connects source reads, protection and durable preparation. Automatic preparation dispatch, browser connection and operational restore/cleanup remain pending. Pipeline owns the calling-side Entra OBO integration; this service validates its delegated tokens.
 
 The [GitHub read-provider boundary](docs/deployment-contract.md#github-read-provider-implementation-boundary) uses user access tokens, complete bounded pagination and exact request/generation binding. It refuses partial/ambiguous provider results and has no runtime bean or production credential supplier. This does not activate a real connection or prove restore safety.
 
@@ -59,11 +59,16 @@ The private [credential adapters](docs/deployment-contract.md#local-private-cred
 
 Runtime inputs and the remaining admission/origin handoff are listed in the [deployment contract](docs/deployment-contract.md#local-adapter-configuration). No credential or production environment file is checked in. OpenAPI is generated from the HTTP implementation; it is disabled by default and, when explicitly enabled, requires the Pipeline caller/scope. No Swagger UI or callback endpoint is installed.
 
-The [verification workflow](.github/workflows/verify.yml) runs Maven with real PostgreSQL and builds a local non-root image. It has read-only repository permissions and does not publish images or deploy. After packaging, the local image check is:
+The [CI workflow](.github/workflows/ci.yml) checks contribution messages, runs Maven
+with real PostgreSQL and builds/checks a non-root linux/amd64 image for PRs and
+main pushes. Verification has read-only repository permissions. A separate job
+publishes the exact checked main-push archive through shared Workspace automation;
+PRs never publish. CI does not deploy or assign an RC/version per integration.
+After packaging, the local image check is:
 
 ```bash
-docker build --build-arg VCS_REF=working-tree --tag pipesor-ingestion:local .
-docker image inspect pipesor-ingestion:local --format '{{.Config.User}}'
+docker build --platform linux/amd64 --build-arg VCS_REF=working-tree --tag pipesor-ingestion:local .
+GITHUB_SHA=working-tree python3 tools/check_image.py pipesor-ingestion:local
 ```
 
 The image build passed locally. Inspection confirmed `10001:10001`; `docker run --rm --network none pipesor-ingestion:local` exited 1 for missing `server.port`, as expected with no runtime inputs. The pinned Temurin Java 25 image requires explicit runtime configuration; building an image does not activate any integration or approve an IaC/runtime handoff.
@@ -154,3 +159,91 @@ Verification of durable publication execution on 2026-11-09: README `clean verif
 Verification on 2026-11-10: README `clean verify` passed 515 tests with zero failures/errors/skips. The final build's Java/resource/pom fingerprints match the current source. Tests include real PostgreSQL webhook acceptance, duplicate/conflicting delivery and concurrency checks; real local HTTP/HMAC/JWT/OpenAPI and deadline/capacity checks; filesystem authority and RSA signing; and simulated Key Vault/CDN boundaries. Sixty core sources compiled with an empty dependency classpath and `jdeps` reported only `java.base`. The packaged JAR excludes test fixtures/libraries; independent review closed the findings. GitHub App, Azure resources and an installation do not exist for this pilot, so no live end-to-end result is claimed. CI was explicitly deferred and was not executed, diagnosed or modified.
 
 Verification of approved Verify preparation on 2026-11-10: README `clean verify` passed 541 tests with zero failures/errors/skips. After removing an unused version constant and adding preamble-failure regression assertions, the 9-test profile scope passed again through `verify`, repackaging the final source. Sixty-two core sources compiled with an empty classpath; `jdeps` reported only `java.base`. PostgreSQL 17.11 tests exercise claim-before-read, protected atomic preparation, reserved IDs/frozen bytes through publication, crossed receipt rejection, expiry, revoked scope and oversized wire refusal. Archive HTTP/CDN and GitHub source data remain synthetic; no App/Azure integration or CI was run. The packaged JAR excludes test fixtures/libraries; affected relative file links and whitespace checks passed. Independent review has no material findings left. Automatic preparation dispatch and live environment validation remain pending.
+
+## Shared Java CI adoption
+
+The [CI workflow](.github/workflows/ci.yml) checks commit messages first, retains
+service-owned JDK 25 setup, then uses the SHA-pinned private
+[Workspace automation](https://github.com/pipesor-org/pipesor-workspace/blob/main/README.md)
+for Maven verification and 14-day Surefire report retention. It builds a
+linux/amd64 candidate tagged
+`ghcr.io/<lowercase-repository>:sha-<source-sha>-<run>-<attempt>` and checks the
+non-root user, OCI source/revision labels and missing-configuration rejection.
+The rejection check uses no credentials and `--network none`, bounds each Docker
+command and removes its disposable container even on timeout. It requires exit 1
+with the missing `server.port` diagnostic. Positive packaged startup with a
+complete runtime fixture is not checked here; the real PostgreSQL/servlet
+composition tests remain separate and do not establish packaged startup.
+
+Only successful main pushes outside act save the tested image and checksum in
+`image-<run>-<attempt>` (one-day transfer retention). A separate dependent publish
+job grants `packages: write` to the shared publisher; verification remains
+`contents: read`. The publisher downloads that same run/attempt archive, checks
+checksum and source revision, and publishes without checkout or rebuild using
+only its own `GITHUB_TOKEN`. It always logs out and retains schema-1
+`candidate.json` in `candidate-<run>-<attempt>` for 90 days, binding image, digest,
+source SHA and build run/attempt. This is candidate publication, with no
+per-integration RC, release or deployment. Private Actions access remains disabled
+and must be authorized/configured separately; no hosted GHCR success is claimed.
+
+Install contribution tooling with `bun install --frozen-lockfile`, then run
+`lefthook validate`, `bun run setup:hooks` once per clone and `bun run commitlint --last`.
+The standalone Lefthook binary must be on PATH; Bun 1.4.4 is development tooling,
+not an application runtime dependency. CI checks PR titles/full squash messages,
+nonempty descriptions, commit ranges and the latest integrated commit.
+
+The renamed CI workflow, reordered steps, composite log nesting and separate
+publisher are incompatible with the closed legacy Verify preparation profile.
+Its approved parser and fixtures remain unchanged and its opt-in preparation is
+still disabled by default. New CI runs/jobs/step numbers are unsupported until a
+separate profile is reviewed against actual hosted provenance. Retaining job name
+`verify` does not establish compatibility; do not reinterpret CI publication or
+contribution-tooling failures as legacy Maven/image evidence.
+
+Consumers pin merged Workspace commit
+`c11b183f5248b708794192e6d6ce4d781ef340f5`. No access policy or cloud resource is
+changed by this preparation. Focused local tooling checks are:
+
+```bash
+python3 -m unittest discover -s tools -p 'test_*.py' -v
+actionlint -shellcheck= .github/workflows/ci.yml
+```
+
+Local workflow verification uses act 0.2.97 and actionlint 1.7.12 (development-only).
+With Docker Engine in WSL2, set `SHARED_WORKSPACE_CHECKOUT` to a reviewed checkout
+whose HEAD matches the pinned Workspace SHA, then run only verification:
+
+```bash
+timeout 30m act push -W .github/workflows/ci.yml -j verify -e .github/act/push.json \
+  -P ubuntu-latest=catthehacker/ubuntu:act-24.04@sha256:4f2d5083a9d10d018c1c511eb8665cd480553c11975e78fd903a46daa830768b \
+  --local-repository pipesor-org/pipesor-workspace@c11b183f5248b708794192e6d6ce4d781ef340f5="$SHARED_WORKSPACE_CHECKOUT" \
+  --container-architecture linux/amd64 --network host \
+  --env TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 \
+  --env-file /dev/null --secret-file /dev/null --var-file /dev/null --input-file /dev/null \
+  --no-cache-server --rm
+```
+
+ShellCheck is omitted above. act executes the working tree and substitutes the
+shared repository locally; it omits Maven cache and report/image uploads. It does
+not verify GitHub private access, artifacts/log archives, GHCR publication,
+permissions or concurrency. The Docker socket grants control of the local daemon:
+run only reviewed code.
+
+Historical verification on 2026-11-11, before the CI rename/publication change:
+act Verify with the earlier pinned local Workspace substitution passed all 541
+Java tests (no failures/errors/skips), packaged the JAR, built the image and
+checked the non-root user. Frozen Bun install, Lefthook configuration, commitlint
+accepted/rejected messages and actionlint (without ShellCheck) passed. The Java
+source, capture profile and fixtures were not modified. Those results do not
+validate the new CI topology, image smoke or hosted log-archive compatibility.
+No image was published and no Azure action was performed in that historical run.
+
+Verification of the new CI on 2026-11-11: act verify with the merged Workspace
+tree substituted locally passed all 541 Java tests with zero failures/errors/skips,
+packaged the JAR, built the linux/amd64 candidate and ran the real Docker checks
+for non-root user, OCI source/revision and missing-configuration rejection.
+The three focused image-checker failure/cleanup tests and actionlint (without
+ShellCheck) passed. No Java tests were removed, skipped or rewritten to accept
+the new topology. These tests do not establish legacy capture-profile support
+for the new CI. Artifact transfer, GHCR publication and private hosted access
+remain unverified; act executed only verify and performed no publication/Azure action.

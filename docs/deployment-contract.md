@@ -50,8 +50,8 @@ PostgreSQL's `vector` allowlist setting does not execute SQL extension creation,
 | Requirement | Value | Source and status |
 |---|---|---|
 | Delivery unit | Container image for this service. | Documented fact: `deployment.containerization`, ADR-001/018. |
-| Immutable identity | Associate the image with its source commit and digest; promote the same digest through the staged delivery flow. | Documented organization target: CONTRIBUTING artifact promotion. No digest, version, image or automation exists. |
-| Release/version | Policy targets Conventional-Commit-derived SemVer and protected `vX.Y.Z` tags after staging, without rebuilding. | Documented organization target, not configured release tooling. GHCR is selected in the integrated IaC baseline; image path/tag convention, build/publish responsibility and private-pull credentials remain pending under PD-035. |
+| Immutable identity | Associate the image with its source commit and digest; promote the same digest through the staged delivery flow. | Documented organization target: CONTRIBUTING artifact promotion. CI now prepares main-candidate publication through the shared Workspace publisher; a hosted digest is not evidenced here. |
+| Release/version | Policy targets Conventional-Commit-derived SemVer and protected `vX.Y.Z` tags after staging, without rebuilding. | Documented organization target, not configured release tooling. GHCR is selected in the integrated IaC baseline; CI derives the technical sha/run/attempt tag and records the published digest in candidate schema 1. Release tooling and private-pull credentials remain pending under PD-035. |
 | Ownership handoff | Proposed: this service's maintainers supply the tested image/digest and runtime/configuration requirements; IaC maintainers consume the approved delivery inputs for the agreed environment. | Proposal under PD-035; no named build/publish owner or accepted handoff contract is documented. |
 | Promotion responsibility | Independent QA approval before staging and independent product-owner approval before production are policy targets. | Documented organization target. Concrete automation, environment mapping and operational owners remain unknown under PD-035; do not infer them from the sibling IaC implementation. |
 
@@ -483,7 +483,7 @@ Protection is a bounded known-pattern policy, not a universal anonymization guar
 
 The publisher passes frozen message bytes, IDs, correlation and application properties to the synchronous Azure SDK outside SQL transactions. SDK acceptance precedes ledger confirmation. An uncertain send remains unavailable and can duplicate delivery on retry under the accepted contract. Retry/try-timeout settings bound SDK attempts, not an entire scheduled workflow. Worker concurrency/backoff/recovery and operational capacity are still pending; no worker is silently activated by enabling messaging.
 
-The local Docker recipe pins a Java 25 runtime digest and runs UID/GID 10001. The verification-only workflow pins actions, runs README checks and builds locally without registry credentials, publication or deployment. Hosted CI, cloud identity, network access, runtime secret delivery, migrations and production compatibility have not been exercised by local tests. These artifacts do not close the full PD-035 handoff.
+The local Docker recipe pins a Java 25 runtime digest and runs UID/GID 10001. The original verification-only workflow built locally without publication; the current CI candidate-publication section below supersedes that automation status. Cloud identity, runtime secret delivery, migrations and production compatibility have not been exercised by local tests. These artifacts do not close the full PD-035 handoff.
 
 Local verification on 2026-11-09: README `clean verify` passed 236 tests without failures/errors/skips. Docker build succeeded and image inspection confirmed UID/GID `10001:10001`; execution without runtime inputs and with networking disabled exited 1 for missing `server.port`. Workflow YAML parsed and trigger/permission/action-pin checks passed; the hosted workflow was not run. No image was pushed and no external resource, secret or grant was created.
 
@@ -618,6 +618,15 @@ Verification on 2026-11-10: README `clean verify` passed 515 tests with zero fai
 
 ## Verify preparation profile v1 — approved locally
 
+**Legacy source profile:** CI was renamed to `.github/workflows/ci.yml` (`CI`) on
+2026-11-11, reordered contribution checks ahead of Maven and added a separate
+candidate publisher. The Maven/image step numbers and composite log nesting do
+not satisfy this approved closed profile. The Java parser, fixtures and existing
+541-test baseline are unchanged; they describe the historical Verify source,
+not support for new CI runs. Preparation remains disabled by default. A new
+profile requires separately reviewed real workflow/job/step/archive provenance;
+do not enable or reinterpret this profile for the new workflow.
+
 On 2026-11-10, read-only capture-source research used existing run `42843891934`, attempt `1`, workflow `412504984`, job `129926055075`. The archive was bounded and processed in memory; only whitelisted structural metadata and Maven marker coordinates were exposed to analysis. No raw log body or signed URL was published/persisted, and no CI run was executed, changed or judged. This human-account research is not validation of the service's App/installation access.
 
 The observed archive contains per-step files under the unique job name `verify`. Step index 4 matches the actual job API's `Compile, test with isolated PostgreSQL and package`; index 5 matches `Build local non-root image`. The Maven file contains explicit clean/resources/compiler/surefire/jar/spring-boot goal markers. These observations justify a closed pilot profile, not a universal archive-format guarantee.
@@ -648,3 +657,45 @@ The attempt ZIP is never written to disk. Each selected entry must match the API
 Preparation commits the lease/fence and UUID reservations before source reads, checks receipt/source identity before protection, and checks the claim again after I/O/protection. The ledger rechecks current scope and the authoritative lease/fence during atomic preparation. Protected encoded outputs must fit the configured wire limit before the ledger freezes the plan. Provider failures retain only fixed diagnostics; raw input is neither a database payload nor a log/error cause. A failure creates no partial observation/output plan; it does not acknowledge source capture or broker delivery as complete.
 
 Verification of approved Verify preparation on 2026-11-10: README `clean verify` passed 541 tests with zero failures/errors/skips. After removing an unused version constant and adding preamble-failure regression assertions, the 9-test profile scope passed again through `verify`, repackaging the final source. Sixty-two core sources compiled with an empty classpath; `jdeps` reported only `java.base`. PostgreSQL 17.11 tests exercise claim-before-read, protected atomic preparation, reserved IDs/frozen bytes through publication, crossed receipt rejection, expiry, revoked scope and oversized wire refusal. Archive HTTP/CDN and GitHub source data remain synthetic; no App/Azure integration or CI was run. The packaged JAR excludes test fixtures/libraries; affected relative file links and whitespace checks passed. Independent review has no material findings left. Automatic preparation dispatch and live environment validation remain pending.
+
+
+## CI candidate publication — 2026-11-11
+
+The current [CI workflow](../.github/workflows/ci.yml) verifies PRs/main with
+read-only contents access, service-owned JDK setup and shared Maven/report
+retention. Contribution checks precede application checks. It builds one
+linux/amd64 image with OCI source/revision labels, checks its non-root user and
+bounded network-isolated missing-configuration rejection, and archives the
+checked bytes/checksum only on main push outside act. Positive packaged startup
+with full runtime inputs remains unverified; the local PostgreSQL servlet test
+is separate evidence.
+
+A dependent publish job calls Workspace at merged full SHA
+`c11b183f5248b708794192e6d6ce4d781ef340f5`, grants only contents-read/packages-write,
+and uses its own GitHub token, never inherited secrets. The shared publisher
+rejects non-main/non-push/act contexts, derives
+`ghcr.io/<lowercase-repository>:sha-<source-sha>-<run>-<attempt>`, validates the
+same-run archive checksum and source revision, loads and pushes without rebuild,
+validates the repository digest and always logs out. The schema-1 candidate
+handoff records source SHA, image repository, digest and build run/attempt for
+90 days; the image transfer artifact lasts one day. No deployment, RC for every
+integration, stable release, Azure resource or runtime permission is introduced.
+Private shared Actions access remains disabled; hosted artifacts/GHCR integration
+and private runtime pulls require separate evidence. Commands and act limits
+are owned by the [README](../README.md#shared-java-ci-adoption).
+
+The historical Verify source IDs, approved step mapping and dated verification
+records above remain evidence of their original source only. The new CI
+workflow/jobs/steps are unsupported by the legacy capture profile, whose opt-in
+activation remains disabled by default. This automation change does not revise
+capture parsing, fixtures, stages or domain behavior.
+
+Verification of the new CI on 2026-11-11: act verify with the merged Workspace
+tree substituted locally passed all 541 Java tests with zero failures/errors/skips,
+packaged the JAR, built the linux/amd64 candidate and ran the real Docker checks
+for non-root user, OCI source/revision and missing-configuration rejection.
+The three focused image-checker failure/cleanup tests and actionlint (without
+ShellCheck) passed. No Java tests were removed, skipped or rewritten to accept
+the new topology. These tests do not establish legacy capture-profile support
+for the new CI. Artifact transfer, GHCR publication and private hosted access
+remain unverified; act executed only verify and performed no publication/Azure action.
