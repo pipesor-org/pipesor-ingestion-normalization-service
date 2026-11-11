@@ -10,3 +10,14 @@ target/
 node_modules/
 __pycache__/
 lefthook-local.yml
+
+# Local delivery evidence and tested-image transfer
+/.delivery/
+/deployment-result.json
+/deployment-before.json
+/deployment-before.json.tmp
+/deployment-result.json.tmp
+/service-image.tar
+/service-image.tar.sha256
+/candidate.json
+*.py[cod]

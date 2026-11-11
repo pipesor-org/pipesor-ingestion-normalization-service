@@ -183,7 +183,8 @@ checksum and source revision, and publishes without checkout or rebuild using
 only its own `GITHUB_TOKEN`. It always logs out and retains schema-1
 `candidate.json` in `candidate-<run>-<attempt>` for 90 days, binding image, digest,
 source SHA and build run/attempt. This is candidate publication, with no
-per-integration RC, release or deployment. Private Actions access remains disabled
+per-integration RC or deployment. Explicit release/dev-delivery tooling is prepared
+below and remains source-disabled. Private Actions access remains disabled
 and must be authorized/configured separately; no hosted GHCR success is claimed.
 
 Install contribution tooling with `bun install --frozen-lockfile`, then run
@@ -206,7 +207,8 @@ changed by this preparation. Focused local tooling checks are:
 
 ```bash
 python3 -m unittest discover -s tools -p 'test_*.py' -v
-actionlint -shellcheck= .github/workflows/ci.yml
+bun run test:release
+actionlint -shellcheck= .github/workflows/ci.yml .github/workflows/release.yml .github/workflows/deploy.yml
 ```
 
 Local workflow verification uses act 0.2.97 and actionlint 1.7.12 (development-only).
@@ -247,3 +249,235 @@ ShellCheck) passed. No Java tests were removed, skipped or rewritten to accept
 the new topology. These tests do not establish legacy capture-profile support
 for the new CI. Artifact transfer, GHCR publication and private hosted access
 remain unverified; act executed only verify and performed no publication/Azure action.
+
+
+## Release and disabled dev delivery
+
+[Release candidate](.github/workflows/release.yml) and
+[Deploy dev](.github/workflows/deploy.yml) are implemented, with
+`false && github.ref == 'refs/heads/main'` on both jobs. Variables and dispatches
+cannot activate the committed source. Commands below are operating instructions
+for separately authorized activation, not evidence of a GitHub/Azure execution.
+The local tools reuse Pipeline's candidate/release/receipt contracts; they do not
+add an environment or change Ingestion's legacy capture profile.
+
+Release names an existing digest using a new Git tag and a draft-then-published
+GitHub Release whose `candidate.json` preserves image/source/build identity. It
+never rebuilds, assigns registry aliases or changes a deployed app. Choose either
+the original successful main CI run/attempt or a retained published RC/stable
+Release, never both. Both paths still verify the original CI attempt and source
+ancestry; deleting that producer can make a retained Release unusable. CI artifact
+expiry can be bridged by the Release asset, not by fabricated provenance. Keep
+release assets, producer evidence and GHCR digests while deployed or eligible for
+recovery; 90-day Actions retention alone does not satisfy that lifetime. There is
+no automatic registry/evidence cleanup.
+
+Follow the [shared versioning convention](https://github.com/pipesor-org/pipesor-docs/blob/main/docs/development/cicd.md#versiones-paquetes-y-retención)
+and [SemVer](https://semver.org/): supply an explicit normal `version` before the
+first stable tag and while its base is 0.x; omit it once the stable base is 1.x+.
+Conventional Commit impact selects major/minor/patch after 1.x. An RC is optional,
+selected explicitly and never assigned per integration. Stable from a retained RC
+keeps its X.Y.Z core. Existing tags are never overwritten. Stable requires the
+[proposed preprod candidate-validation contract](https://github.com/pipesor-org/pipesor-docs/blob/main/docs/development/cicd.md#candidate-validation-versus-active-deployment):
+one authoritative record for that source/digest and retained successful status,
+with revocation/unfinished validation rejected. The producer and preprod environment
+are not commissioned; dev-only operation cannot qualify stable. No future
+environment workflow or hotfix branch automation is added.
+
+To inspect a real selected candidate locally, authenticate `gh` for repository
+reads, set `CANDIDATE_RUN_ID` and `CANDIDATE_RUN_ATTEMPT` to its original successful
+main build, then fetch and plan without remote writes:
+
+```bash
+export GITHUB_REPOSITORY=pipesor-org/pipesor-ingestion-normalization-service
+export CANDIDATE_RUN_ID CANDIDATE_RUN_ATTEMPT
+python3 tools/deployment.py fetch \
+  --candidate .delivery/candidate/candidate.json --run .delivery/candidate-run.json \
+  --output .delivery/release-fetch.json
+GITHUB_REPOSITORY=pipesor-org/pipesor-ingestion-normalization-service bun tools/release.mjs plan \
+  --candidate .delivery/candidate/candidate.json --run .delivery/candidate-run.json \
+  --kind rc --version 0.1.0
+```
+
+`0.1.0` is only an example target. Planning writes ignored local plan/notes/manifest
+files. For Release selection, set `CANDIDATE_RELEASE` to its actual version tag and
+unset both CI selectors before fetching. The local CLI uses `GH_TOKEN`/`gh`
+authentication only for reads in this path. Before enabling remote release, review
+the source disable removal, set repository variable `RELEASE_ENABLED=true`, and
+record exact digest/publication authorization in a repository issue/PR. After
+separate activation, the RC dispatch using an actual CI candidate is:
+
+```bash
+gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main \
+  -f candidate_run_id="$CANDIDATE_RUN_ID" -f candidate_run_attempt="$CANDIDATE_RUN_ATTEMPT" \
+  -f kind=rc -f version="$TARGET_VERSION" \
+  -f confirm_image="$CONFIRM_IMAGE" -f authorization_ref="$AUTHORIZATION_REF"
+```
+
+`TARGET_VERSION` follows the 0.x/1.x rule above; `CONFIRM_IMAGE` is the exact
+`ghcr.io/pipesor-org/pipesor-ingestion-normalization-service@sha256:<digest>` and
+`AUTHORIZATION_REF` is this repository's issue/PR URL recording authorization.
+For a retained manifest replace both CI inputs with `candidate_release`; choose
+`kind=stable` only with the required preprod evidence. Inspect any partial tag,
+draft, manifest and local plan before retry; tag/draft/publish is not atomic.
+Never move a version or remove evidence automatically.
+
+### Activation and first dev deployment
+
+Delivery accepts the same candidate selectors, verifies historical successful
+main `.github/workflows/ci.yml` provenance and source ancestry, and checks exact
+digest/target authorization before OIDC login. It updates only the image of one
+existing Single-revision, single-container ACA app. `aca_ready` means matching
+control-plane ready revision and image; it is not functional acceptance, ingress
+health or database recovery. Repeating an already-ready digest can succeed
+without creating a new revision. Activation requires, in order:
+
+1. Complete [IaC ADR 004](https://github.com/pipesor-org/pipesor-iac/blob/main/docs/adr-004-mvp-state-and-deployment.md)
+   and the [deployment contract](docs/deployment-contract.md): actual runtime
+   identity/configuration, PostgreSQL/migration/recovery, readiness/probes, private
+   GHCR pull and service integration, cost/access review and exact Azure
+   target/action authorization. D03/D03-EXP are not approved; the experimental
+   exception is suspended. A local image check does not waive readiness.
+2. Accept application/infra ownership. IaC owns foundations; the accepted app owner
+   provisions/configures the existing app; this native adapter changes its image.
+   Prevent competing Terraform/manual/configuration writes to that image/target.
+   If Terraform retains image ownership, keep this adapter disabled and replace
+   it under review. Preparation does not choose a universal deployment standard.
+3. Qualify ADR 004's disposable one-job Debian VM deployment runner, label
+   `pipesor-dev-deploy`, separately from hosted PR/build runners: current runner
+   and pinned action support, Python 3, Git, GitHub CLI, Azure CLI 2.92.0 and needed
+   network access; discard guest changes after each trusted job. This runbook does
+   not authorize runner creation or registration.
+4. Supply repository variables `ACA_RESOURCE_ID`, `ACA_ENVIRONMENT_ID`,
+   `ACA_CONTAINER_NAME`, `AZURE_SUBSCRIPTION_ID`, `AZURE_TENANT_ID`,
+   `AZURE_CLIENT_ID`, `ACA_IMAGE_OWNER=native` and `ACA_DEPLOYMENT_ENABLED=true`.
+   IDs must match the approved existing app/environment/subscription; no default
+   destination is embedded. These identifiers/flags are not credentials or grants.
+5. Establish separate Azure deployment OIDC trust for this exact repository's
+   `refs/heads/main`, audience `api://AzureADTokenExchange`, and least-privilege
+   RBAC on the existing app. OIDC authenticates; RBAC authorizes. Runtime identity
+   and private-image pull credentials are separate. App-write can alter more than
+   an image; the adapter's narrower behavior is not field-level RBAC. Do not add
+   subscription Contributor, role-assignment or infrastructure-creation grants
+   for convenience.
+6. Obtain explicit activation authorization, review/publish removal of the source
+   disable, then dispatch from main with exact target/digest and issue/PR
+   authorization. GitHub Free/private lacks the independently enforced environment
+   approvals assumed by future stages: the URL and flags are procedural operator
+   assertions, not independent approval proof. First hosted artifact/OIDC/GHCR/ACA
+   execution requires its own authorized validation.
+
+Release jobs serialize under `ingestion-release`; deploy and rollback share
+`ingestion-dev-delivery` without cancellation. These locks do not coordinate IaC
+or manual writers. With all prerequisites met, set the candidate's original CI
+selectors, exact `CONFIRM_IMAGE`, approved `ACA_RESOURCE_ID` and authorization URL,
+then dispatch the first deployment:
+
+```bash
+gh workflow run deploy.yml --repo "$GITHUB_REPOSITORY" --ref main \
+  -f operation=deploy \
+  -f candidate_run_id="$CANDIDATE_RUN_ID" -f candidate_run_attempt="$CANDIDATE_RUN_ATTEMPT" \
+  -f confirm_image="$CONFIRM_IMAGE" -f confirm_target="$ACA_RESOURCE_ID" \
+  -f authorization_ref="$AUTHORIZATION_REF"
+```
+
+Use `candidate_release` instead of both CI inputs for a retained manifest. Neither
+path builds, runs Terraform, creates an app, changes runtime secrets or restores
+SQL/state. Before any image update the adapter writes and fsyncs
+`deployment-before.json` with previous image/revisions and validated identity.
+Version-1 `deployment-result.json` binds repository/image/target/environment/
+container, original build SHA/run/attempt and delivery run/attempt/workflow SHA;
+it records success or failure and the ready revision on success. The workflow
+attempts to preserve before/result/request in
+`deployment-dev-<run>-<attempt>` for 90 days even after preflight/login failure.
+No raw Azure response or secret values are retained. Runner loss can prevent
+upload; local fsync is not an independent recovery backup. Preserve required
+producer and delivery evidence beyond artifact expiry when still needed.
+
+### Operator rollback
+
+Rollback uses the same guarded dev workflow with `operation=rollback`, never an
+automatic reaction or separate workflow. A failed CI/publication job alone does
+not show a deployed app changed. After an update/readiness failure or functional
+regression:
+
+1. Freeze competing application/IaC/manual writes. Record incident, suspect run,
+   candidate, approved exact target and symptoms. Review queued jobs so they
+   cannot immediately undo recovery; do not blindly cancel an active Azure write.
+2. Preserve failed delivery evidence and inspect actual state read-only with the
+   qualified Azure CLI, approved tenant/subscription and exact target. Failed
+   responses do not establish that no mutation occurred. Set `FAILED_RUN_ID` and
+   `FAILED_RUN_ATTEMPT` to that delivery and run:
+
+```bash
+gh run download "$FAILED_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+  --name "deployment-dev-${FAILED_RUN_ID}-${FAILED_RUN_ATTEMPT}" \
+  --dir .delivery/rollback/failed
+az containerapp show --ids "$ACA_RESOURCE_ID" \
+  --query '{id:id,image:properties.template.containers[0].image,state:properties.provisioningState,revision:properties.latestRevisionName,ready:properties.latestReadyRevisionName}' \
+  --output json
+```
+
+3. Select candidate A with prior functional acceptance and an earlier successful
+   main `deploy.yml` delivery to this same target. Its original CI or retained
+   Release must still verify; image/digest must exist. `KNOWN_GOOD_RUN_ID` and
+   `KNOWN_GOOD_RUN_ATTEMPT` identify that earlier delivery, not its CI build or the
+   failed B run. The tool checks its version-1 `aca_ready` receipt, recorded ready
+   revision, exact repository/image/target/environment/container/build identity,
+   delivery run/attempt and workflow SHA against successful producer metadata.
+   Failed, foreign, unversioned or mismatched evidence is rejected before Azure.
+4. Have responsible owners confirm A against current schema, configuration,
+   secret versions and dependencies. Record exact target/digest/candidate,
+   functional/compatibility evidence and explicit recovery authorization in
+   `AUTHORIZATION_REF`. Set `rollback_confirmed=true` only after this review.
+   The boolean/URL are procedural assertions, not automated compatibility checks.
+   If A is already running and checks pass, document whether no update is needed.
+5. Dispatch a new recovery run after authorized activation. Do not rerun B: it
+   still selects B. `RECOVERY_RELEASE` is A's retained `vX.Y.Z-rc.N` or `vX.Y.Z`;
+   `RECOVERY_IMAGE` is its exact repository@digest. Use either that Release or A's
+   original successful CI selectors, never both:
+
+```bash
+gh workflow run deploy.yml --repo "$GITHUB_REPOSITORY" --ref main \
+  -f operation=rollback \
+  -f rollback_run_id="$KNOWN_GOOD_RUN_ID" -f rollback_run_attempt="$KNOWN_GOOD_RUN_ATTEMPT" \
+  -f rollback_confirmed=true -f candidate_release="$RECOVERY_RELEASE" \
+  -f confirm_image="$RECOVERY_IMAGE" -f confirm_target="$ACA_RESOURCE_ID" \
+  -f authorization_ref="$AUTHORIZATION_REF"
+gh run watch "$RECOVERY_RUN_ID" --repo "$GITHUB_REPOSITORY" --exit-status
+```
+
+Obtain `RECOVERY_RUN_ID` from the newly dispatched run. For CI selection replace
+`candidate_release` with A's `candidate_run_id`/`candidate_run_attempt`. While the
+source disable remains, dispatch skips delivery and cannot recover an app.
+
+6. Inspect the recovery receipt for `operation=rollback`, A's digest/target,
+   selected earlier delivery/revision, new delivery identity and `status=aca_ready`.
+   The new ready revision may differ from the historical `rollback_revision`.
+   Perform separately approved authenticated functional checks and monitoring;
+   control-plane readiness alone is insufficient. Preserve failed/recovery runs,
+   receipts, original producer evidence and functional outcome before lifting the
+   write freeze. No public health route or observation interval is invented here.
+
+Stop before any write if candidate/producer/image evidence is missing, target or
+identity differs, schema/configuration compatibility is unknown, owner writes
+compete, rollback fails or required functional validation is unavailable. Escalate
+to an explicitly reviewed forward fix or owner-led provisioning/data recovery.
+Do not substitute arbitrary images, bypass checks, move tags or expose secrets.
+This rollback restores only a verified image: no SQL downgrade, Terraform-state,
+credential/configuration restore, traffic splitting or future-environment recovery.
+Local tests simulate A ready → B failure → explicit rollback to A, provenance,
+pre-write storage failures and readiness rejection; simulated GitHub/Azure is not
+live integration evidence.
+
+### Full local delivery verification
+
+On 2026-11-11 the completed three-workflow baseline passed actionlint 1.7.12
+(without ShellCheck), 8 Bun release tests and 21 Python image/delivery checks.
+The final act 0.2.97 verify run passed those checks, all 541 Java tests without
+failures/errors/skips, JAR packaging, amd64 image build and real Docker image
+identity/missing-configuration smoke. GitHub/Azure responses in delivery tests
+are simulated; the release CLI checks use temporary Git history. No Java tests
+or legacy capture fixtures were removed, relaxed or changed. Release/deploy jobs
+remain source-disabled and were not executed. Hosted artifact/publication,
+OIDC/RBAC/private pulls and operational recovery require separate validation.
