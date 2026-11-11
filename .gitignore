@@ -5,3 +5,7 @@
 *.key
 .DS_Store
 target/
+
+# Local contribution tooling
+node_modules/
+lefthook-local.yml

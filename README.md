@@ -154,3 +154,56 @@ Verification of durable publication execution on 2026-11-09: README `clean verif
 Verification on 2026-11-10: README `clean verify` passed 515 tests with zero failures/errors/skips. The final build's Java/resource/pom fingerprints match the current source. Tests include real PostgreSQL webhook acceptance, duplicate/conflicting delivery and concurrency checks; real local HTTP/HMAC/JWT/OpenAPI and deadline/capacity checks; filesystem authority and RSA signing; and simulated Key Vault/CDN boundaries. Sixty core sources compiled with an empty dependency classpath and `jdeps` reported only `java.base`. The packaged JAR excludes test fixtures/libraries; independent review closed the findings. GitHub App, Azure resources and an installation do not exist for this pilot, so no live end-to-end result is claimed. CI was explicitly deferred and was not executed, diagnosed or modified.
 
 Verification of approved Verify preparation on 2026-11-10: README `clean verify` passed 541 tests with zero failures/errors/skips. After removing an unused version constant and adding preamble-failure regression assertions, the 9-test profile scope passed again through `verify`, repackaging the final source. Sixty-two core sources compiled with an empty classpath; `jdeps` reported only `java.base`. PostgreSQL 17.11 tests exercise claim-before-read, protected atomic preparation, reserved IDs/frozen bytes through publication, crossed receipt rejection, expiry, revoked scope and oversized wire refusal. Archive HTTP/CDN and GitHub source data remain synthetic; no App/Azure integration or CI was run. The packaged JAR excludes test fixtures/libraries; affected relative file links and whitespace checks passed. Independent review has no material findings left. Automatic preparation dispatch and live environment validation remain pending.
+
+## Shared Java CI adoption
+
+The verification workflow retains its own triggers, JDK 25 setup, Dockerfile and
+image checks. Maven verification and test-report retention use the private
+[Workspace automation](https://github.com/pipesor-org/pipesor-workspace/blob/main/README.md).
+Install contribution tooling with `bun install --frozen-lockfile`, then run
+`lefthook validate`, `bun run setup:hooks` once per clone and `bun run commitlint --last`.
+The standalone Lefthook binary must be on PATH; Bun 1.4.4 is development tooling,
+not an application runtime dependency. CI checks PR titles/full squash messages,
+nonempty descriptions, commit ranges and the latest integrated commit.
+
+The Maven/image outer step names and positions remain unchanged for the approved
+Verify preparation profile. No parser, fixtures or domain rules are changed.
+Composite log-archive compatibility still needs a separately authorized hosted
+run; preserve rejection of unknown layouts. A failure in contribution tooling is
+not a Maven/image failure and remains unsupported by that closed capture profile.
+Only verification is adopted here: no image publication, release or deployment is
+introduced. Runtime image startup validation beyond the existing build/user check
+remains pending; tests of the application do not establish packaged startup.
+
+Consumers pin the shared commit SHA. Publish that Workspace commit and authorize
+private Actions access before publishing this caller change. No access policy,
+remote branch or cloud resource is changed by local preparation.
+
+Local workflow verification uses act 0.2.97 and actionlint 1.7.12 (development-only).
+With Docker Engine in WSL2, set `SHARED_WORKSPACE_CHECKOUT` to a reviewed checkout
+whose HEAD matches the pinned Workspace SHA, then run only verification:
+
+```bash
+actionlint -shellcheck= .github/workflows/verify.yml
+timeout 30m act push -W .github/workflows/verify.yml -j verify -e .github/act/push.json \
+  -P ubuntu-latest=catthehacker/ubuntu:act-24.04@sha256:4f2d5083a9d10d018c1c511eb8665cd480553c11975e78fd903a46daa830768b \
+  --local-repository pipesor-org/pipesor-workspace@923ac0452f7be62c915e0e205cd9e5d2ac1af7a0="$SHARED_WORKSPACE_CHECKOUT" \
+  --container-architecture linux/amd64 --network host \
+  --env TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 \
+  --env-file /dev/null --secret-file /dev/null --var-file /dev/null --input-file /dev/null \
+  --no-cache-server --rm
+```
+
+ShellCheck is omitted above. act executes the working tree and substitutes the
+shared repository locally; it omits Maven cache and report uploads. It does not
+verify GitHub private access, metadata/log archives, permissions or concurrency.
+The Docker socket grants control of the local daemon: run only reviewed code.
+
+Verification on 2026-11-11: act verify with the pinned local Workspace substitution
+passed all 541 Java tests (no failures/errors/skips), packaged the JAR, built the
+image and checked the non-root user. Frozen Bun install, Lefthook configuration,
+commitlint accepted/rejected messages and actionlint (without ShellCheck) passed.
+The Java source, capture profile and fixtures were not modified. The same-run
+logs/archive contract of a composite on hosted GitHub is not established by act.
+No image was published, no remote branch/access policy changed and no Azure action
+was performed. The shared Workflow SHA is a local commit pending distribution.
