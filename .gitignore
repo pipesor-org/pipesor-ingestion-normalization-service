@@ -8,4 +8,5 @@ target/
 
 # Local contribution tooling
 node_modules/
+__pycache__/
 lefthook-local.yml
