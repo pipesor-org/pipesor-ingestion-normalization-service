@@ -214,3 +214,8 @@ The operation is explicit per receipt; automatic preparation dispatch/recovery i
 ## Explicit preparation dispatch boundary
 
 The [bounded preparation dispatcher](deployment-contract.md#explicit-preparation-dispatch--local-implementation) selects accepted, unleased receipts through a read-only CQRS port and invokes the existing preparation operation outside SQL transactions. The ledger owns claims/fences and the complete frozen plan. Caller-supplied absolute claim/recovery horizons retain the existing contract; advisory cursor/budget/stop state is not authority or durable retry state. No new schema, retention policy, external API or scheduler is added. Continuous operation and the new CI source profile remain activation gates.
+
+
+## Local continuous preparation scheduling
+
+The [approved preparation scheduler](deployment-contract.md#continuous-preparation-scheduling--approved-locally) is an opt-in infrastructure lifecycle around the existing bounded worker. The application/domain remain framework-free. Each tick derives fixed claim/recovery horizons from one UTC sample; monotonic cadence and a generation stop signal prevent rapid/overlapping starts, including stop/start with old I/O still in flight. Database claims/fences remain authoritative across instances. The scheduler does not add an event input, GitHub workflow trigger, schema, evidence-retention policy, Pipeline behavior or AI processing. Real activation still requires a supported source profile and environment readiness.

@@ -25,6 +25,8 @@ ingestion:
     enabled: false
   preparation-worker:
     enabled: false
+  preparation-scheduler:
+    enabled: false
   publication-worker:
     enabled: false
   capture:
