@@ -11,6 +11,11 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.postgresql.util.PSQLException;
 import org.pipesor.ingestion.capture.application.commandhandlers.CaptureHandler;
+import org.pipesor.ingestion.capture.application.commandhandlers.PrepareGitHubCapture;
+import org.pipesor.ingestion.capture.application.services.VerifyPreparationProfile;
+import org.pipesor.ingestion.capture.infrastructure.messaging.NormalizedOutputEncoder;
+import org.pipesor.ingestion.normalization.infrastructure.protection.BoundedEvidenceProtection;
+import java.nio.charset.StandardCharsets;
 import org.pipesor.ingestion.capture.application.commands.CaptureCommands.*;
 import org.pipesor.ingestion.capture.application.ports.*;
 import org.pipesor.ingestion.capture.domain.exceptions.CaptureFailure;
@@ -391,4 +396,84 @@ class CapturePersistenceTests {
         var deletion = assertThrows(PSQLException.class, () -> sql("delete from ingestion.capture_delivery_aliases where receipt_id=?", receipt.id()));
         assertEquals("23514", deletion.getSQLState()); assertEquals("capture_delivery_aliases_immutable_ck", deletion.getServerErrorMessage().getConstraint());
     }
+    private CaptureReceipt pilotReceipt() {
+        var scope = new CaptureScope("pilot-" + UUID.randomUUID(), UUID.randomUUID(), "1", "341855203", "3", "1446318020", "412504984", "scope-1");
+        return handler.accept(acceptance(scope, "pilot delivery", UUID.randomUUID().toString(), "pilot-correlation"));
+    }
+    private GitHubMachineCapture.StepLogs pilotLogs(CaptureReceipt receipt, boolean failed) {
+        var request = new GitHubMachineCapture.Request(receipt.scope(), receipt.runId(), receipt.runAttempt(), receipt.correlationId());
+        var start = SOURCE_TIME.minusSeconds(20);
+        var maven = new GitHubMachineCapture.Step(4, "Compile, test with isolated PostgreSQL and package", "completed", failed ? "failure" : "success", start, start.plusSeconds(10));
+        var image = new GitHubMachineCapture.Step(5, "Build local non-root image", "completed", failed ? "skipped" : "success", start.plusSeconds(11), start.plusSeconds(15));
+        var job = new GitHubMachineCapture.Job("129926055075", "verify", "completed", failed ? "failure" : "success", start, start.plusSeconds(16), List.of(maven, image));
+        var run = new GitHubMachineCapture.Run(request, "pipesor-org/pipesor-ingestion-normalization-service", "feature/pilot", "b".repeat(40), "completed", job.conclusion(), start.minusSeconds(1), SOURCE_TIME, start, List.of(job));
+        var text = start.plusSeconds(1) + " [INFO] --- compiler:3.14.1:compile (default-compile) @ ingestion ---\n"
+                + start.plusSeconds(2) + " [INFO] --- surefire:3.5.4:test (default-test) @ ingestion ---\n"
+                + start.plusSeconds(3) + " [ERROR] password=synthetic-private-password\n"
+                + (failed ? start.plusSeconds(4) + " [ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.4:test (default-test) on project ingestion: failure\n" : start.plusSeconds(4) + " [INFO] Tests complete\n");
+        var logs = new ArrayList<GitHubMachineCapture.StepLog>();
+        logs.add(new GitHubMachineCapture.StepLog(job.id(), 4, text.getBytes(StandardCharsets.UTF_8)));
+        if (!failed) { logs.add(new GitHubMachineCapture.StepLog(job.id(), 5, (start.plusSeconds(12) + " image complete\n").getBytes(StandardCharsets.UTF_8))); }
+        return new GitHubMachineCapture.StepLogs(run, logs);
+    }
+    private PrepareGitHubCapture coordinator(java.util.function.Function<GitHubMachineCapture.Request, GitHubMachineCapture.StepLogs> read,
+            EvidenceProtection protection, int maxWireBytes) {
+        var github = new GitHubMachineCapture() {
+            public Run readRun(Request request) { throw new AssertionError("Use attempt step archive"); }
+            public Log readJobLog(Request request, String jobId) { throw new AssertionError("Whole job is not step evidence"); }
+            public StepLogs readStepLogs(Request request) {
+                assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+                return read.apply(request);
+            }
+        };
+        return new PrepareGitHubCapture(handler, github, new VerifyPreparationProfile(100000), new NormalizeObservationHandler(protection),
+                new NormalizedOutputEncoder(), clock, maxWireBytes, "bounded-v1");
+    }
+    @Test void preparationClaimsBeforeSourceReadAndFreezesOnlyProtectedPlan(CapturedOutput captured) throws Exception {
+        var receipt = pilotReceipt();
+        var operation = coordinator(request -> {
+            var claimed = ledger.receipt(receipt.id());
+            assertNotNull(claimed.claimOwner()); assertTrue(claimed.claimFence() > 0);
+            assertEquals(request.scope(), claimed.scope());
+            return pilotLogs(receipt, true);
+        }, new BoundedEvidenceProtection("bounded-v1", 100000, 100000, 100), 120000);
+        var prepared = operation.prepare(new Claim(receipt.id(), UUID.randomUUID(), NOW.plusSeconds(30)), NOW.plusSeconds(120));
+        assertEquals("PREPARED", prepared.phase());
+        assertEquals(2L, scalar("select count(*) from ingestion.publication_outputs where observation_id=?", prepared.observationId()));
+        var bytes = (byte[]) scalar("select payload from ingestion.publication_outputs where id=?", receipt.evidenceMessageId());
+        var wire = new String(bytes, StandardCharsets.UTF_8);
+        assertFalse(wire.contains("synthetic-private-password")); assertTrue(wire.contains("[redacted]"));
+        assertEquals("v1:job:129926055075:step:4:index:1", scalar("select fragment_locator from ingestion.publication_outputs where id=?", receipt.evidenceMessageId()));
+        assertTrue(publish(prepared)); assertTrue(publish(prepared));
+        assertEquals(receipt.snapshotMessageId(), broker.sent.getFirst().id());
+        assertEquals(receipt.evidenceMessageId(), broker.sent.getLast().id());
+        assertArrayEquals(bytes, broker.sent.getLast().body()); assertFalse(captured.getAll().contains("synthetic-private-password"));
+    }
+    @Test void preparationRejectsCrossReceiptSourceBeforeProtection() throws Exception {
+        var receipt = pilotReceipt(); var other = pilotReceipt();
+        var operation = coordinator(request -> pilotLogs(other, false), input -> { throw new AssertionError("Crossing reached protection"); }, 120000);
+        failure(CONFLICT, () -> operation.prepare(new Claim(receipt.id(), UUID.randomUUID(), NOW.plusSeconds(30)), NOW.plusSeconds(120)));
+        assertEquals(0L, scalar("select count(*) from ingestion.capture_observations where origin_receipt_id=?", receipt.id()));
+    }
+    @Test void expiredPreparationAfterReadCannotProtectOrFreeze() throws Exception {
+        var receipt = pilotReceipt();
+        var operation = coordinator(request -> { clock.now = NOW.plusSeconds(30); return pilotLogs(receipt, false); },
+                input -> { throw new AssertionError("Expired claim reached protection"); }, 120000);
+        failure(STALE_CLAIM, () -> operation.prepare(new Claim(receipt.id(), UUID.randomUUID(), NOW.plusSeconds(30)), NOW.plusSeconds(120)));
+        assertEquals("ACCEPTED", ledger.receipt(receipt.id()).phase());
+    }
+    @Test void preparationRejectsOversizedWireAndRevokedScopeWithoutPartialPlan() throws Exception {
+        var tooLarge = pilotReceipt();
+        var operation = coordinator(request -> pilotLogs(tooLarge, false), input -> Optional.of(input), 10);
+        failure(INVALID_INPUT, () -> operation.prepare(new Claim(tooLarge.id(), UUID.randomUUID(), NOW.plusSeconds(30)), NOW.plusSeconds(120)));
+        assertEquals(0L, scalar("select count(*) from ingestion.capture_observations where origin_receipt_id=?", tooLarge.id()));
+        var revoked = pilotReceipt();
+        var revokeOperation = coordinator(request -> {
+            authorization.decision = CurrentMachineScope.Decision.CHANGED_OR_LOST; return pilotLogs(revoked, false);
+        }, input -> Optional.of(input), 120000);
+        failure(SCOPE_CHANGED, () -> revokeOperation.prepare(new Claim(revoked.id(), UUID.randomUUID(), NOW.plusSeconds(30)), NOW.plusSeconds(120)));
+        assertEquals("BLOCKED", ledger.receipt(revoked.id()).phase());
+        assertEquals(0L, scalar("select count(*) from ingestion.capture_observations where origin_receipt_id=?", revoked.id()));
+    }
+
 }

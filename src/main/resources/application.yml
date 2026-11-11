@@ -21,6 +21,8 @@ ingestion:
     enabled: false
   github-webhook:
     enabled: false
+  capture-preparation:
+    enabled: false
   publication-worker:
     enabled: false
   capture:

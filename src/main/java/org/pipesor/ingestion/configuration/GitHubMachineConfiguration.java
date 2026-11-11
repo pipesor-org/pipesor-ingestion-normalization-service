@@ -15,6 +15,7 @@ import org.pipesor.ingestion.github.infrastructure.custody.KeyVaultCredentialCus
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.*;
 import org.springframework.core.env.Environment;
+import org.springframework.beans.factory.ObjectProvider;
 
 /** Explicit local composition only; no route, scheduler, secret provisioning or restored human authorization. */
 /** shortcut: one configured pilot context; define multi-context routing before enabling additional capture domains. */
@@ -41,7 +42,11 @@ public class GitHubMachineConfiguration {
     @Bean SecretClient githubAppSecretClient(Settings s) {return KeyVaultCredentialCustody.managedIdentityClient(s.vault(),s.vaultTimeout());}
     @Bean KeyVaultAppMaterial githubAppMaterial(Settings s,SecretClient githubAppSecretClient) {return new KeyVaultAppMaterial(githubAppSecretClient,s.vault(),s.appId(),s.key(),s.webhook(),s.maxSecretBytes());}
     @Bean GitHubAppJwtSigner githubAppJwtSigner(Settings s,KeyVaultAppMaterial material,Clock clock) {return new GitHubAppJwtSigner(s.appId(),material::signingKey,clock,s.jwtTtl(),s.skew());}
-    @Bean GitHubMachineTransport githubMachineTransport(Settings s,GitHubFileAuthority authority,GitHubAppJwtSigner signer,Clock clock) {return new GitHubMachineTransport(authority,signer,s.appId(),s.version(),s.operationBudget(),s.pageSize(),s.maxPages(),s.maxJobs(),s.maxResponseBytes(),s.maxLogBytes(),s.downloadHosts(),clock);}
+    @Bean GitHubMachineTransport githubMachineTransport(Settings s,GitHubFileAuthority authority,GitHubAppJwtSigner signer,Clock clock,ObjectProvider<GitHubMachineTransport.ArchiveLimits> limits) {
+        var archive=limits.getIfAvailable();
+        return archive==null ? new GitHubMachineTransport(authority,signer,s.appId(),s.version(),s.operationBudget(),s.pageSize(),s.maxPages(),s.maxJobs(),s.maxResponseBytes(),s.maxLogBytes(),s.downloadHosts(),clock)
+                : new GitHubMachineTransport(authority,signer,s.appId(),s.version(),s.operationBudget(),s.pageSize(),s.maxPages(),s.maxJobs(),s.maxResponseBytes(),s.maxLogBytes(),archive,s.downloadHosts(),clock);
+    }
     @Bean GitHubWorkflowWebhook githubWorkflowWebhook(Settings s,GitHubFileAuthority authority,KeyVaultAppMaterial material,CaptureHandler handler) {
         var hook=new GitHubWorkflowWebhook.HookContext(s.domain(),s.tenant(),s.appId());
         return new GitHubWorkflowWebhook(hook,material::webhookSecret,authority.webhook(hook),Set.of("completed"),s.maxBodyBytes(),handler);
