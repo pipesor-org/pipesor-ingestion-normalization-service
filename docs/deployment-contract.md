@@ -51,8 +51,8 @@ PostgreSQL's `vector` allowlist setting does not execute SQL extension creation,
 |---|---|---|
 | Delivery unit | Container image for this service. | Documented fact: `deployment.containerization`, ADR-001/018. |
 | Immutable identity | Associate the image with its source commit and digest; promote the same digest through the staged delivery flow. | Documented organization target: CONTRIBUTING artifact promotion. CI now prepares main-candidate publication through the shared Workspace publisher; a hosted digest is not evidenced here. |
-| Release/version | Policy targets Conventional-Commit-derived SemVer and protected `vX.Y.Z` tags after staging, without rebuilding. | Documented organization target, not configured release tooling. GHCR is selected in the integrated IaC baseline; CI derives the technical sha/run/attempt tag and records the published digest in candidate schema 1. Release tooling and private-pull credentials remain pending under PD-035. |
-| Ownership handoff | Proposed: this service's maintainers supply the tested image/digest and runtime/configuration requirements; IaC maintainers consume the approved delivery inputs for the agreed environment. | Proposal under PD-035; no named build/publish owner or accepted handoff contract is documented. |
+| Release/version | Policy targets Conventional-Commit-derived SemVer and protected `vX.Y.Z` tags after staging, without rebuilding. | Documented organization target; local release tooling is prepared and source-disabled. GHCR is selected in the integrated IaC baseline; CI derives the technical sha/run/attempt tag and records the published digest in candidate schema 1. Explicit RC/stable release tooling is implemented but source-disabled, with stable gated on retained preprod candidate validation. Runtime private-pull credentials remain pending under PD-035. |
+| Ownership handoff | Proposed: this service's maintainers supply the tested image/digest and runtime/configuration requirements; IaC maintainers consume the approved delivery inputs for the agreed environment. | CI build/publication is service-owned. The native image-only dev adapter is prepared and source-disabled; named app provisioning/configuration ownership and accepted native-versus-Terraform image handoff remain pending under PD-035. |
 | Promotion responsibility | Independent QA approval before staging and independent product-owner approval before production are policy targets. | Documented organization target. Concrete automation, environment mapping and operational owners remain unknown under PD-035; do not infer them from the sibling IaC implementation. |
 
 Current target: only `dev` is selected for temporary academic MVP preparation (ADR-019 and IaC ADR 004). Local service integration/validation, complete readiness/access/cost review and explicit target/action authorization precede Azure writes. The dev procedural approval exception does not extend to future environments; retain independent QA/production promotion rules when commissioned.
@@ -678,8 +678,9 @@ rejects non-main/non-push/act contexts, derives
 same-run archive checksum and source revision, loads and pushes without rebuild,
 validates the repository digest and always logs out. The schema-1 candidate
 handoff records source SHA, image repository, digest and build run/attempt for
-90 days; the image transfer artifact lasts one day. No deployment, RC for every
-integration, stable release, Azure resource or runtime permission is introduced.
+90 days; the image transfer artifact lasts one day. Explicit release/dev-delivery
+and rollback tooling is prepared below and source-disabled. CI does not assign
+RCs per integration or activate delivery, Azure resources or runtime permissions.
 Private shared Actions access remains disabled; hosted artifacts/GHCR integration
 and private runtime pulls require separate evidence. Commands and act limits
 are owned by the [README](../README.md#shared-java-ci-adoption).
@@ -699,3 +700,87 @@ ShellCheck) passed. No Java tests were removed, skipped or rewritten to accept
 the new topology. These tests do not establish legacy capture-profile support
 for the new CI. Artifact transfer, GHCR publication and private hosted access
 remain unverified; act executed only verify and performed no publication/Azure action.
+
+
+## Prepared release, dev delivery and rollback — source-disabled
+
+The [release workflow](../.github/workflows/release.yml),
+[dev delivery workflow](../.github/workflows/deploy.yml),
+[release tool](../tools/release.mjs) and [delivery adapter](../tools/deployment.py)
+reuse Pipeline's proven local contracts with Ingestion source/test identities.
+Both workflows retain the literal source-level `false && main` disable; no
+variable or dispatch can activate them. This is implemented preparation, not
+hosted GitHub or Azure verification, deployment approval or a changed readiness
+contract. The [README runbook](../README.md#release-and-disabled-dev-delivery)
+owns runnable commands, every configuration/input, activation and stop conditions.
+
+Release selects an existing candidate by original successful main CI run/attempt
+or retained published Release; both paths retain CI/source ancestry checks.
+It associates a new SemVer tag and Release asset with the same source/digest,
+without rebuild or registry mutation. The shared version policy requires an
+explicit development target with no stable base or a 0.x base, Conventional
+Commit impact after 1.x, optional explicitly selected RCs and no tag overwrite.
+Stable retains the selected RC's core and requires one authoritative successful
+preprod candidate-validation record for the exact SHA/digest; revoked, unfinished
+or missing validation is refused. See the
+[shared promotion contract](https://github.com/pipesor-org/pipesor-docs/blob/main/docs/development/cicd.md#candidate-validation-versus-active-deployment)
+and [SemVer](https://semver.org/). No preprod environment/validation producer is
+commissioned; the MVP remains dev-only. Source-disable removal,
+`RELEASE_ENABLED=true`, exact image confirmation and a repository issue/PR
+authorization record are separate publication prerequisites. Partial tag/draft
+publication requires inspection rather than overwrite or automatic cleanup.
+
+The dev adapter validates candidate schema 1, historical successful
+`.github/workflows/ci.yml` run/attempt, repository/source/ancestry, exact image and
+target confirmation, configured subscription/tenant/client/app/environment/
+container, native image ownership and authorization reference before Azure login.
+Its accepted scope is one existing single-container, Single-revision app and an
+image-only update. Activation requires ADR 004 readiness and cost/access review,
+actual runtime/database/migration/probe/private-pull integration, accepted
+app/infra image ownership and exclusion of competing writes, qualified disposable
+one-job Debian deployment runner (`pipesor-dev-deploy`, Azure CLI 2.92.0), exact
+repository/main OIDC trust and app-scoped RBAC, plus explicit target/action and
+source activation authorization. Infrastructure creation, broad grants and
+configuration/secret delivery are not implied. The generic runner label is
+shared guidance, not an authorized new resource. GitHub Free/private procedural
+issue/PR authorization does not independently enforce future reviewer gates.
+
+Deploy and rollback serialize under `ingestion-dev-delivery` without cancellation;
+release serializes under `ingestion-release`. Neither lock controls infrastructure
+or manual writers. Before update, fsynced previous-image/revision evidence and a
+version-1 delivery receipt bind the approved target/candidate and the delivery
+run/attempt/workflow SHA. Successful receipts report `aca_ready` and the ready
+revision; failures retain phase/status without raw cloud payloads or secrets.
+The workflow attempts to retain before/result/request artifacts for 90 days,
+including preflight/login failures; runner loss can prevent upload and local
+persistence is not an independent backup. The existing candidate digest is
+reused; same-digest readiness need not create a new revision. `aca_ready` is
+control-plane evidence, not functional acceptance or schema recovery.
+
+Operator rollback runs through that same guarded dev path after preserving failed
+evidence, inspecting actual target state and freezing competing writes. It
+requires an earlier successful main `deploy.yml` producer and version-1
+`aca_ready` receipt for the exact repository/image/target/environment/container
+and original candidate SHA/build run/attempt, bound to its delivery run/attempt/
+workflow SHA. Ordinary candidate CI/Release checks remain mandatory. Owners must
+review prior functional acceptance and current schema/configuration/secret-version
+compatibility, supply explicit recovery authorization and set
+`rollback_confirmed=true`; those inputs are procedural assertions. Mismatched,
+unversioned, failed or unverifiable receipts stop before Azure. A new recovery
+run selects A's existing digest rather than rerunning failed B; it records its
+own versioned receipt and verifies readiness followed by separately approved
+functional checks. The earlier revision is a reference, not a promise to reuse
+that exact revision. No automatic rollback, SQL downgrade, Terraform-state,
+credential/configuration restoration, traffic splitting or future-environment
+recovery is implemented.
+
+Retain selected Release assets, GHCR images, original producer and delivery
+evidence while deployed or needed for promotion/recovery. Expiring Actions
+artifacts alone do not provide this lifetime; deleting the original CI producer
+can make even a retained Release ineligible. There is no registry cleanup tool or
+automatic deletion in this increment. Missing evidence, uncertain compatibility,
+identity/target mismatch, competing writes, recovery failure or absent functional
+validation requires stopping for owner review. The copied regression checks use
+synthetic GitHub/Azure responses and temporary local Git history; they do not
+prove hosted permissions, OIDC, registry pulls or ACA behavior. Java application,
+legacy capture parsing/fixtures and disabled preparation defaults are unchanged.

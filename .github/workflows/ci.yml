@@ -30,6 +30,8 @@ jobs:
           bun-version-file: package.json
       - name: Install commitlint
         run: bun install --frozen-lockfile
+      - name: Check release planning and gates
+        run: bun run test:release
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.14.8'
