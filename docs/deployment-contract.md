@@ -827,3 +827,15 @@ legacy capture parsing/fixtures and disabled preparation defaults are unchanged.
 Verification of explicit preparation dispatch on 2026-11-11: README `clean verify` passed 555 tests with zero failures/errors/skips. The focused 42-test scope passed before that build. PostgreSQL 17.11 checks cover eligibility/lease boundaries without replay cutoff, two competing workers with exactly one source read and one frozen plan, and advancing to healthy work after a provider failure. Unit checks cover absolute-horizon expiry, including expiry reported as stale rather than unsupported, malformed/failed selection, cursor wrap, cancellation and budget. Sixty-four core sources compiled with an empty classpath; `jdeps` reported only `java.base`. Independent review closed its diagnostic finding. Whitespace/relative file links and JAR test-library/fixture exclusions passed. GitHub/provider inputs remain synthetic. CI/CD files and tooling were unchanged; no workflow, publication or deployment was executed. The new CI capture profile, continuous scheduler policy and real environment validation remain pending.
 
 Verification of continuous preparation scheduling on 2026-11-11: README `clean verify` passed 563 tests with zero failures/errors/skips and packaged the Boot JAR. The 8-test runner/configuration scope passed beforehand. New checks use actual scheduler threads and controlled clocks/worker doubles to verify single-sample horizons, fresh owners, fixed cadence across stop/start, no overlap with interruption-ignoring I/O, persistent stop signals, unavailable/fatal visibility and private-diagnostic exclusion. Configuration checks prove the old worker flag stays explicit-only and missing/invalid/overflowing durations fail closed. Existing PostgreSQL ledger/concurrency tests also passed in the full suite; no persistence schema changed. Independent review closed the cadence and test-observability findings. Affected relative file links, whitespace and packaged JAR fixture/test-library exclusions passed. No CI/CD, publication scheduler, source parser, event contracts or neighboring repositories were changed. No real GitHub/Azure validation, workflow execution, branch publication or deployment was performed. The current CI source profile and actual runtime inputs remain activation gates.
+
+## Internal machine capture scope v1
+
+The endpoint `/internal/v1/capture/machine-scope-checks` is disabled unless
+`ingestion.machine-scope.enabled=true`. Its separate machine identity chain
+requires an explicit Entra v2 issuer, signing-key URI, directory tenant,
+recipient audience, permitted Pipeline client and principal, operation
+role, and clock skew. The endpoint also requires one explicit capture
+tenant, App ID, capture domain, authority file, file and entry limits, request
+time and size limits, and an in-flight limit. This route checks current
+capture permission only. Its service process receives those settings
+from trusted environment configuration.
