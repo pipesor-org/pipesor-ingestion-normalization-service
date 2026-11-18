@@ -599,6 +599,14 @@ The user confirmed on 2026-11-10 that the actual tenant/App/installation/vault/s
 5. Configure the existing App's webhook URL/secret and selected events through the authorized operator once the HTTPS endpoint exists. The service never installs the App, creates per-repository webhooks or triggers a workflow. Ingress/access/tracing settings must exclude signatures, protocol secrets, signed download URLs and raw bodies.
 6. Validate signed delivery → durable receipt → authorized source read → reviewed step/excerpt mapping → protection → prepared frozen plan → broker → idempotent consumers, including revocation/outage/replay and restoration. Until mapping and resources exist, local tests demonstrate the component boundaries, not this live end-to-end result.
 
+The local protected-evidence scope check reuses the authority file with a
+trusted, explicitly bound capture route. It checks tenant, App, capture
+domain, account, installation, repository, workflow, exact scope revision and
+the completed action. An unreadable or invalid file returns unavailable.
+The scope check is available for local composition. Machine caller
+authentication, selection of the trusted route and the Pipeline API still
+require the owner-reviewed contract.
+
 The machine webhook composition binds one explicitly configured pilot App/tenant/capture domain. Additional entries in the authority file are not automatically activated webhook routes or fan-out. An approved multi-context routing/ownership contract is needed before expanding beyond that configured pilot; no tenant is selected from an unsigned header or dashboard workflow actor.
 
 The public webhook additionally requires an explicit positive `ingestion.github-webhook.max-in-flight` bound. Requests beyond that bound return 503 before allocating a body buffer or accessing secrets. The slot covers both body collection and any started acceptance processing; an HTTP timeout must not free it while that processing is still running. One phase transition chooses whether a completed body may start processing or a timeout has already closed it; no acceptance begins after a body-timeout winner. Response deadlines still cannot roll back an already started metadata commit, so a timed-out accepted delivery remains an unknown acknowledgement recoverable by durable deduplication.
