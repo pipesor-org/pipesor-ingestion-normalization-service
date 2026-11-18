@@ -11,6 +11,7 @@ import org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook.*;
 import org.pipesor.ingestion.github.application.ports.*;
 import org.pipesor.ingestion.github.application.services.GitHubAccessFailure;
 import org.pipesor.ingestion.github.domain.model.valueobjects.*;
+import org.pipesor.ingestion.normalization.domain.model.valueobjects.WorkflowObservation;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.*;
 import tools.jackson.databind.json.JsonMapper;
@@ -44,6 +45,22 @@ public final class GitHubFileAuthority implements CurrentMachineScope,Installati
     @Override public Decision verify(CaptureScope expected) {
         try {var snapshot=load();return snapshot.machines().stream().anyMatch(m->m.scope().equals(expected))?Decision.AUTHORIZED:Decision.CHANGED_OR_LOST;}
         catch(RuntimeException unavailable){throw captureUnavailable();}
+    }
+    /** The caller supplies the trusted capture route, independently of the event body. */
+    public Decision verifyProtectedEvidenceScope(HookContext trustedRoute, WorkflowObservation.CaptureContext capture,
+            WorkflowObservation.Pipeline pipeline) {
+        try {
+            if (!appId.equals(trustedRoute.appId())) return Decision.UNAVAILABLE;
+            if (!trustedRoute.tenantId().equals(capture.tenantId())) return Decision.CHANGED_OR_LOST;
+            var expected = new CaptureScope(trustedRoute.captureDomain(), trustedRoute.tenantId(),
+                    trustedRoute.appId(), capture.githubAccountId(), capture.githubInstallationId(),
+                    pipeline.githubRepositoryId(), pipeline.githubWorkflowId(), capture.scopeRevision());
+            boolean allowed = load().machines().stream()
+                    .anyMatch(machine -> expected.equals(machine.scope()) && machine.actions().contains("completed"));
+            return allowed ? Decision.AUTHORIZED : Decision.CHANGED_OR_LOST;
+        } catch (RuntimeException unavailable) {
+            return Decision.UNAVAILABLE;
+        }
     }
     @Override public Observation<InstallationAdmission.Request,Boolean> read(InstallationAdmission.Request request) {
         try {

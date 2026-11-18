@@ -14,6 +14,7 @@ import org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook.*;
 import org.pipesor.ingestion.github.application.ports.*;
 import org.pipesor.ingestion.github.application.services.GitHubAccessFailure;
 import org.pipesor.ingestion.github.domain.model.valueobjects.*;
+import org.pipesor.ingestion.normalization.domain.model.valueobjects.WorkflowObservation;
 import static org.junit.jupiter.api.Assertions.*;
 
 class GitHubFileAuthorityTests {
@@ -48,6 +49,31 @@ class GitHubFileAuthorityTests {
         assertNull(a.webhook(hook(OTHER,"pilot")).apply(source("completed")));assertNull(a.webhook(hook(TENANT,"other-domain")).apply(source("completed")));
         assertNull(a.webhook(hook(TENANT,"pilot")).apply(new Source("completed","360","240",SCOPE.repositoryId(),"591","680",1)));
         assertEquals(Decision.CHANGED_OR_LOST,a.verify(new CaptureScope("pilot",TENANT,"120","240","360",SCOPE.repositoryId(),SCOPE.workflowId(),"machine-r6")));
+    }
+    @Test void protectedEvidenceScopeUsesTrustedRouteAndRechecksExactCompletedBinding() throws Exception {
+        var a = authority();
+        var route = hook(TENANT, "pilot");
+        assertEquals(Decision.AUTHORIZED, a.verifyProtectedEvidenceScope(route, SCOPE.context(), SCOPE.pipeline()));
+        assertEquals(Decision.CHANGED_OR_LOST,
+                a.verifyProtectedEvidenceScope(hook(OTHER, "pilot"), SCOPE.context(), SCOPE.pipeline()));
+        assertEquals(Decision.CHANGED_OR_LOST,
+                a.verifyProtectedEvidenceScope(hook(TENANT, "other-domain"), SCOPE.context(), SCOPE.pipeline()));
+        assertEquals(Decision.UNAVAILABLE,
+                a.verifyProtectedEvidenceScope(new HookContext("pilot", TENANT, "121"), SCOPE.context(), SCOPE.pipeline()));
+        var wrongAccount = new WorkflowObservation.CaptureContext(TENANT, "241", SCOPE.installationId(), SCOPE.scopeRevision());
+        var wrongInstallation = new WorkflowObservation.CaptureContext(TENANT, SCOPE.accountId(), "361", SCOPE.scopeRevision());
+        var wrongRepository = new WorkflowObservation.Pipeline("481", SCOPE.workflowId());
+        var wrongWorkflow = new WorkflowObservation.Pipeline(SCOPE.repositoryId(), "591");
+        assertEquals(Decision.CHANGED_OR_LOST, a.verifyProtectedEvidenceScope(route, wrongAccount, SCOPE.pipeline()));
+        assertEquals(Decision.CHANGED_OR_LOST, a.verifyProtectedEvidenceScope(route, wrongInstallation, SCOPE.pipeline()));
+        assertEquals(Decision.CHANGED_OR_LOST, a.verifyProtectedEvidenceScope(route, SCOPE.context(), wrongRepository));
+        assertEquals(Decision.CHANGED_OR_LOST, a.verifyProtectedEvidenceScope(route, SCOPE.context(), wrongWorkflow));
+        replace(VALID.replace("machine-r7", "machine-r8"));
+        assertEquals(Decision.CHANGED_OR_LOST, a.verifyProtectedEvidenceScope(route, SCOPE.context(), SCOPE.pipeline()));
+        replace(VALID.replace("completed", "requested"));
+        assertEquals(Decision.CHANGED_OR_LOST, a.verifyProtectedEvidenceScope(route, SCOPE.context(), SCOPE.pipeline()));
+        replace("private-invalid-file");
+        assertEquals(Decision.UNAVAILABLE, a.verifyProtectedEvidenceScope(route, SCOPE.context(), SCOPE.pipeline()));
     }
     @Test void atomicReplacementRevokesWithoutLastGoodCacheAndRootRevisionIsNotImplicitScopeRevision() throws Exception {
         var a=authority();assertEquals(Decision.AUTHORIZED,a.verify(SCOPE));replace(VALID.replace("document-r2","document-r3"));assertEquals(Decision.AUTHORIZED,a.verify(SCOPE));
