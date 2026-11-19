@@ -119,6 +119,26 @@ class MachineScopeHttpTests {
         assertEquals("UNAVAILABLE", JSON.readTree(unavailable.body()).get("code").asString());
     }
 
+    @Test void checksOnlyTheCurrentFileAndDoesNotDetectRevisionReuse() throws Exception {
+        var bearer = token(Map.of());
+        assertDecision(bearer, "AUTHORIZED");
+        Files.writeString(file, AUTHORITY.replace("machine-r1", "machine-r2"));
+        assertDecision(bearer, "DENIED");
+        Files.writeString(file, AUTHORITY.replace("[\"completed\"]", "[\"in_progress\"]"));
+        assertDecision(bearer, "DENIED");
+        Files.writeString(file, "{");
+        assertEquals(503, post(body(), bearer, CORRELATION).statusCode());
+        // Restoring the old label makes its tuple current again; this is no historical guarantee.
+        Files.writeString(file, AUTHORITY.replace("document-r1", "document-r2"));
+        assertDecision(bearer, "AUTHORIZED");
+    }
+
+    private static void assertDecision(String bearer, String decision) throws Exception {
+        var response = post(body(), bearer, CORRELATION);
+        assertEquals(200, response.statusCode(), response.body());
+        assertEquals(decision, JSON.readTree(response.body()).get("decision").asString());
+    }
+
     @Test void rejectsBodyMetadataAndExpiryBeforeScopeRead() throws Exception {
         for (var changed : List.of(body()+" {}", body().replace("\"requestId\":", "\"requestId\":\"private\",\"requestId\":"),
                 body().replace("machine-r1",""), body().replace("480000000000000000001","0480"))) {
