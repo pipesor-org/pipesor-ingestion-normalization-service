@@ -60,6 +60,10 @@ class MachineScopeHttpTests {
         directory = Files.createTempDirectory("machine-scope-http");
         file = directory.resolve("authority.json");
         Files.writeString(file, AUTHORITY);
+        startServer();
+    }
+
+    private static void startServer() {
         context = new SpringApplicationBuilder(Application.class).initializers(c ->
                 org.springframework.boot.test.util.TestPropertyValues.of(
                     "server.port=0", "server.address=127.0.0.1", "springdoc.api-docs.enabled=false",
@@ -128,7 +132,11 @@ class MachineScopeHttpTests {
         assertDecision(bearer, "DENIED");
         Files.writeString(file, "{");
         assertEquals(503, post(body(), bearer, CORRELATION).statusCode());
-        // Restoring the old label makes its tuple current again; this is no historical guarantee.
+        Files.writeString(file, AUTHORITY.replace("machine-r1", "machine-r2"));
+        context.close();
+        startServer();
+        assertDecision(bearer, "DENIED");
+        // Restoring the old label makes its tuple current again, even after restart.
         Files.writeString(file, AUTHORITY.replace("document-r1", "document-r2"));
         assertDecision(bearer, "AUTHORIZED");
     }
