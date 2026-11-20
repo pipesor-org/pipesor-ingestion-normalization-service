@@ -44,7 +44,7 @@ public final class NormalizeObservationHandler {
                     source.commitSha(), texts.service(), texts.environment(), source.correlationId(), source.occurredAt(),
                     source.sourceUpdatedAt(), source.stages(), failure == null ? null
                             : new WorkflowObservation.Failure(failure.stage(), texts.failureSummary(), failure.detectedAt()),
-                    evidence == null ? null : new WorkflowObservation.Evidence(evidence.stage(), texts.job(), texts.excerpt(), evidence.sequence()));
+                    evidence == null ? null : new WorkflowObservation.Evidence(evidence.stage(), texts.job(), texts.excerpt(), evidence.sequence(), evidence.sourceLocator()));
         } catch (NormalizationFailure invalid) { throw new NormalizationFailure(INVALID_PROTECTION_RESULT); }
         return new Result(protectedObservation, command.snapshotMessageId(), command.evidenceMessageId());
     }

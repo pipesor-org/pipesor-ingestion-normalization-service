@@ -30,8 +30,14 @@ public interface GitHubMachineCapture {
         @Override public byte[] bytes(){return bytes.clone();}
         @Override public String toString(){return "MachineStepLog[private]";}
     }
-    record StepLogs(Run run,List<StepLog> logs) {
-        public StepLogs { logs=List.copyOf(logs); }
+    record AggregateLog(String jobId, String member, byte[] bytes) {
+        public AggregateLog { CaptureScope.external(jobId); java.util.Objects.requireNonNull(member); bytes=bytes.clone(); }
+        @Override public byte[] bytes(){return bytes.clone();}
+        @Override public String toString(){return "AggregateLog[private]";}
+    }
+    record StepLogs(Run run,List<StepLog> logs,List<AggregateLog> aggregates) {
+        public StepLogs { logs=List.copyOf(logs); aggregates=List.copyOf(aggregates); }
+        public StepLogs(Run run,List<StepLog> logs){this(run,logs,List.of());}
         @Override public String toString(){return "MachineStepLogs[private]";}
     }
     record Log(Run run,String jobId,byte[] bytes) {

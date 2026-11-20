@@ -88,11 +88,12 @@ public final class GitHubAcquisitionControl {
         System.out.printf("workflow=%s run=%s attempt=1 jobs=%d updatedAt=%s boundStepLogs=%d%n",
                 scope.workflowId(), runId, source.run().jobs().size(), source.run().updatedAt(), source.logs().size());
         try {
-            profile.classify(source);
-            System.out.println("SUPPORTED by Verify v1");
+            var result = profile.classify(source);
+            System.out.println(result.observation().evidence() != null && result.observation().evidence().sourceLocator() != null
+                    ? "SUPPORTED aggregate evidence" : "SUPPORTED by Verify v1");
         } catch (CaptureFailure failure) {
             if (failure.reason() != CaptureFailure.Reason.INVALID_INPUT) throw failure;
-            System.out.println("UNSUPPORTED by Verify v1");
+            System.out.println("UNSUPPORTED by preparation profiles");
         }
     }
 }

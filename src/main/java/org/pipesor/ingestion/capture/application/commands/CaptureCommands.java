@@ -32,7 +32,8 @@ public final class CaptureCommands {
             CaptureScope.safe(normalizerVersion); CaptureScope.safe(protectionPolicyVersion);
             if (protectedResult.observation().evidence() != null) {
                 // Explicit trusted source locator; no job/step parsing or stage classification is inferred here.
-                if (fragmentLocator == null || !fragmentLocator.matches("v1:job:[1-9][0-9]*:step:[1-9][0-9]*:index:(0|[1-9][0-9]*)")) { throw new CaptureFailure(INVALID_INPUT); }
+                var aggregate = protectedResult.observation().evidence().sourceLocator();
+                if (fragmentLocator == null || (aggregate != null ? !aggregate.equals(fragmentLocator) : !fragmentLocator.matches("v1:job:[1-9][0-9]*:step:[1-9][0-9]*:index:(0|[1-9][0-9]*)"))) { throw new CaptureFailure(INVALID_INPUT); }
             }
             else if (fragmentLocator != null) { throw new CaptureFailure(INVALID_INPUT); }
         }

@@ -98,6 +98,41 @@ class VerifyPreparationProfileTests {
         assertEquals("v1:job:991002:step:4:index:0", result.fragmentLocator());
     }
 
+    @Test void bindsOriginalAggregateLineIncludingItsTerminatorAndRejectsAmbiguity() throws Exception {
+        var run = source("failure", BUILD, null).run();
+        var raw = FAILURE.replace("\n", "\r\n");
+        var member = new AggregateLog("991002", "0_verify.txt", (BUILD + raw).getBytes(StandardCharsets.UTF_8));
+        var result = profile.classify(new StepLogs(run, List.of(), List.of(member)));
+        var hash = java.security.MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8));
+        assertEquals("v2:job:991002:member:0_verify.txt:lines:2-2:sha256:" + java.util.HexFormat.of().formatHex(hash),
+                result.fragmentLocator());
+        assertEquals(raw, result.observation().evidence().excerpt());
+        assertNull(result.observation().evidence().sequence());
+        for (var invalid : List.of(new AggregateLog("991003", member.member(), member.bytes()),
+                new AggregateLog(member.jobId(), "other.txt", member.bytes()),
+                new AggregateLog(member.jobId(), member.member(), (raw + raw).getBytes(StandardCharsets.UTF_8)))) {
+            refused(new StepLogs(run, List.of(), List.of(invalid)));
+        }
+    }
+
+    @Test void setupErrorProducesOnlyAnInfrastructureObservation() {
+        var base = source("failure", BUILD, null).run();
+        var step = new Step(1, "Set up job", "completed", "failure", START, START.plusSeconds(5));
+        var job = new Job("991002", "verify", "completed", "failure", START, START.plusSeconds(6), List.of(step));
+        var run = new Run(base.request(), base.fullName(), base.branch(), base.commitSha(), base.status(),
+                base.conclusion(), base.createdAt(), base.updatedAt(), base.startedAt(), List.of(job));
+        var raw = "\uFEFF" + line(2, "##[error]Synthetic setup symptom");
+        var member = new AggregateLog(job.id(), "0_verify.txt", raw.getBytes(StandardCharsets.UTF_8));
+        var result = profile.classify(new StepLogs(run, List.of(), List.of(member)));
+        assertEquals("Job setup reported an error", result.observation().failure().summary());
+        assertEquals(StageName.INFRASTRUCTURE, result.observation().failure().stage());
+        assertEquals(raw, result.observation().evidence().excerpt());
+        for (var insufficient : List.of(line(2, "Starting job"), line(8, "##[error]Late line"))) {
+            refused(new StepLogs(run, List.of(), List.of(new AggregateLog(job.id(), member.member(),
+                    insufficient.getBytes(StandardCharsets.UTF_8)))));
+        }
+    }
+
     private void refused(StepLogs source) {
         var failure = assertThrows(CaptureFailure.class, () -> profile.classify(source));
         assertEquals(CaptureFailure.Reason.INVALID_INPUT, failure.reason());

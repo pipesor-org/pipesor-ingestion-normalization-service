@@ -65,8 +65,8 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
     }
     @Override public Run readRun(Request request){return execute(request,null,false).run();}
     @Override public Log readJobLog(Request request,String jobId){CaptureScope.external(jobId);var result=execute(request,jobId,false);return new Log(result.run(),jobId,result.log());}
-    @Override public StepLogs readStepLogs(Request request){if(archiveLimits==null)throw new CaptureFailure(INVALID_STATE);var result=execute(request,null,true);return new StepLogs(result.run(),result.steps());}
-    private record ReadResult(Run run,byte[] log,List<StepLog> steps) {}
+    @Override public StepLogs readStepLogs(Request request){if(archiveLimits==null)throw new CaptureFailure(INVALID_STATE);return execute(request,null,true).steps();}
+    private record ReadResult(Run run,byte[] log,StepLogs steps) {}
     private ReadResult execute(Request request,String selectedJob,boolean archive) {
         try {
             if(request==null || TransactionSynchronizationManager.isActualTransactionActive() || !appId.equals(request.scope().appId()))throw new CaptureFailure(INVALID_INPUT);
@@ -125,7 +125,7 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
                 catch(java.nio.charset.CharacterCodingException invalidText){throw new CaptureFailure(UNAVAILABLE);}
                 s.sameVersion(runPath,token,sourceVersion);s.fence(base,token);
             }
-            List<StepLog> steps=List.of();
+            StepLogs steps=new StepLogs(run,List.of());
             if(archive){
                 var redirect=s.call(origin.resolve(runPath+"/logs"),token,null,302,maxBytes,false);
                 var target=downloadTarget(redirect);
@@ -144,12 +144,14 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
         if(!"https".equals(target.getScheme()) || target.getHost()==null || !downloadHosts.contains(target.getHost().toLowerCase(Locale.ROOT)) || target.getUserInfo()!=null || target.getFragment()!=null || target.getPort()!=-1)throw new CaptureFailure(UNAVAILABLE);
         return target;
     }
-    private List<StepLog> stepLogs(Run run,byte[] archive,Session session){
+    private StepLogs stepLogs(Run run,byte[] archive,Session session){
         var expected=new HashMap<String,StepLog>();var jobs=new HashSet<String>();
+        String verifyJob = null;
         var systemLogs = new HashSet<String>();
         for(var job:run.jobs()){
             String directory = archiveJobDirectory(job.name());
             if (!jobs.add(directory)) throw new CaptureFailure(UNAVAILABLE);
+            if ("verify".equals(job.name())) { verifyJob = job.id(); }
             systemLogs.add(directory + "/system.txt");
             // A rewritten job label identifies ancillary files only. It cannot bind an evidence member.
             if (!directory.equals(job.name())) continue;
@@ -164,7 +166,15 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
                 if(expected.put(job.name()+"/"+step.number()+"_"+step.name()+".txt",new StepLog(job.id(),step.number(),new byte[0]))!=null)throw new CaptureFailure(UNAVAILABLE);
             }
         }
-        var central=centralNames(archive,session);var seen=new HashSet<String>();var result=new ArrayList<StepLog>();int expanded=0,count=0;
+        var central = centralNames(archive, session);
+        // A proven failed step keeps the original profile and its original archive budgets.
+        boolean aggregateNeeded = verifyJob != null && ("failure".equals(run.conclusion()) || "timed_out".equals(run.conclusion())) && run.jobs().stream().filter(job -> "verify".equals(job.name()))
+                .flatMap(job -> job.steps().stream()).filter(step -> "failure".equals(step.conclusion()) || "timed_out".equals(step.conclusion()))
+                .noneMatch(step -> central.contains("verify/" + step.number() + "_" + step.name() + ".txt"));
+        var seen = new HashSet<String>();
+        var result = new ArrayList<StepLog>();
+        var aggregates = new ArrayList<AggregateLog>();
+        int expanded=0,count=0;
         try(var zip=new ZipInputStream(new ByteArrayInputStream(archive),java.nio.charset.StandardCharsets.UTF_8)){
             for(var entry=zip.getNextEntry();entry!=null;entry=zip.getNextEntry()){
                 session.check();session.authorized();var name=entry.getName();
@@ -172,17 +182,24 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
                 var selected=expected.get(name);boolean folder=entry.isDirectory()&&jobs.contains(name.substring(0,name.length()-1));
                 boolean aggregate=jobs.stream().anyMatch(job->name.matches("[0-9]+_"+java.util.regex.Pattern.quote(job)+"\\.txt"));
                 if(selected==null&&!folder&&!aggregate&&!systemLogs.contains(name))throw new CaptureFailure(UNAVAILABLE);
+                boolean attributable = aggregateNeeded && name.matches("[0-9]{1,9}_verify\\.txt");
                 var bytes=new ByteArrayOutputStream();var buffer=new byte[8192];int read;
                 while((read=zip.read(buffer))!=-1){
-                    session.check();if(read>archiveLimits.maxExpandedBytes()-expanded||folder&&read>0||selected!=null&&read>archiveLimits.maxStepBytes()-bytes.size())throw new CaptureFailure(UNAVAILABLE);
-                    expanded+=read;if(selected!=null)bytes.write(buffer,0,read);
+                    session.check();if(read>archiveLimits.maxExpandedBytes()-expanded||folder&&read>0||(selected!=null||attributable)&&read>archiveLimits.maxStepBytes()-bytes.size())throw new CaptureFailure(UNAVAILABLE);
+                    expanded+=read;if(selected!=null||attributable)bytes.write(buffer,0,read);
                 }
                 if(selected!=null){var content=bytes.toByteArray();strictUtf8(content);result.add(new StepLog(selected.jobId(),selected.stepNumber(),content));}
+                if (attributable) {
+                    if (!aggregates.isEmpty()) throw new CaptureFailure(UNAVAILABLE);
+                    var content = bytes.toByteArray();
+                    strictUtf8(content);
+                    aggregates.add(new AggregateLog(verifyJob, name, content));
+                }
                 zip.closeEntry();
             }
         }catch(IOException|IllegalArgumentException invalid){throw new CaptureFailure(UNAVAILABLE);}
         if(count==0||!central.isEmpty())throw new CaptureFailure(UNAVAILABLE);
-        return List.copyOf(result);
+        return new StepLogs(run,result,aggregates);
     }
     private static String archiveJobDirectory(String name) {
         if (safeArchiveComponent(name)) return name;

@@ -60,6 +60,7 @@ public final class PrepareGitHubCapture {
         }
         receipt.requireClaim(claim.owner(), receipt.claimFence(), clock.instant());
         return capture.prepare(new Prepare(receipt.id(), claim.owner(), receipt.claimFence(), result,
-                "verify-preparation-v1", protectionVersion, classified.fragmentLocator(), payloadRecoverUntil));
+                observation.evidence() != null && observation.evidence().sourceLocator() != null
+                        ? "verify-aggregate-v1" : "verify-preparation-v1", protectionVersion, classified.fragmentLocator(), payloadRecoverUntil));
     }
 }

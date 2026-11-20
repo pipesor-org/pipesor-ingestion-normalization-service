@@ -26,13 +26,13 @@ public final class NormalizedMessagesTransformer {
         var capture = observation.captureContext();
         var execution = observation.execution();
         var evidence = observation.evidence();
-        var envelope = new EvidenceEnvelope("2.0", "protected_workflow_evidence", result.evidenceMessageId(),
+        var envelope = new EvidenceEnvelope(evidence.sourceLocator() == null ? "2.0" : "2.1", "protected_workflow_evidence", result.evidenceMessageId(),
                 observation.occurredAt(), observation.sourceUpdatedAt(), observation.correlationId(), "github_actions",
                 new CaptureContext(capture.tenantId(), capture.githubAccountId(), capture.githubInstallationId(), capture.scopeRevision()),
                 new Pipeline(observation.pipeline().githubRepositoryId(), observation.pipeline().githubWorkflowId()),
                 new Execution(execution.githubRunId(), execution.runAttempt(), execution.status(), execution.conclusion()),
                 new Commit(observation.commitSha()), observation.service(), observation.environment(),
-                new Evidence(evidence.stage(), evidence.job(), observation.failure().summary(), evidence.excerpt(), evidence.sequence()));
+                new Evidence(evidence.stage(), evidence.job(), observation.failure().summary(), evidence.excerpt(), evidence.sequence(), evidence.sourceLocator()));
         return List.of(snapshotMessage, message(result.evidenceMessageId(), observation.correlationId(), "protected_workflow_evidence", 2, envelope));
     }
 
@@ -72,5 +72,6 @@ public final class NormalizedMessagesTransformer {
     private record CaptureContext(UUID tenant_id, String github_account_id, String github_installation_id, String scope_revision) {}
     private record Pipeline(String github_repository_id, String github_workflow_id) {}
     private record Execution(String github_run_id, int run_attempt, String status, String conclusion) {}
-    private record Evidence(WorkflowObservation.StageName stage, String job, String summary, String excerpt, Long sequence) {}
+    private record Evidence(WorkflowObservation.StageName stage, String job, String summary, String excerpt, Long sequence,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) String source_locator) {}
 }

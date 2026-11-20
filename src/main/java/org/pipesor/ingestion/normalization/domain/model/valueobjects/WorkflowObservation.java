@@ -89,9 +89,14 @@ public record WorkflowObservation(CaptureContext captureContext, Pipeline pipeli
         @Override public String toString() { return "Failure[redacted]"; }
     }
 
-    public record Evidence(StageName stage, String job, String excerpt, Long sequence) {
+    public record Evidence(StageName stage, String job, String excerpt, Long sequence, String sourceLocator) {
+        public Evidence(StageName stage, String job, String excerpt, Long sequence) {
+            this(stage, job, excerpt, sequence, null);
+        }
         public Evidence {
             if (stage == null) { fail(INVALID_STAGE); }
+            if (sourceLocator != null && (job == null || !job.matches("[1-9][0-9]*") || !sourceLocator.matches(
+                    "v2:job:" + job + ":member:[0-9]{1,9}_verify\\.txt:lines:([1-9][0-9]{0,8})-\\1:sha256:[0-9a-f]{64}"))) { fail(INVALID_EVIDENCE); }
             text(excerpt, INVALID_EVIDENCE);
             if (job != null && job.isBlank()) { fail(INVALID_EVIDENCE); }
             if (sequence != null && sequence < 0) { fail(INVALID_EVIDENCE); }

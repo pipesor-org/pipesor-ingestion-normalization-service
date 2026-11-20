@@ -861,3 +861,25 @@ tenant, App ID, capture domain, authority file, file and entry limits, request
 time and size limits, and an in-flight limit. This route checks current
 capture permission only. Its service process receives those settings
 from trusted environment configuration.
+
+
+### Aggregate preparation for Verify and CI
+
+For workflows `412504984` and `414901007` on repository `1446318020`, the
+transport can retain a bounded root aggregate for a literal, unique `verify`
+job. When there is no bound verify step file, preparation accepts exactly one
+timestamped Maven goal failure during the failed Maven step, or one runner
+error annotation during failed job setup. Other failed jobs, duplicate candidate
+lines, missing timestamps and missing markers are inconclusive. The output
+describes the observed symptom. No source step appears in the aggregate locator.
+The digest covers the selected line before masking. The frozen evidence message
+uses 2.1 and still routes on major 2. Historical step preparation uses 2.0.
+
+Tests use synthetic bytes matching observed ZIP layouts. The retained historical
+inventory records member sizes and source metadata only. To verify a real
+observation, follow the operator handoff above and inspect the existing Java
+control's classification for run `43055757606`. A valid setup observation
+requires the retained bytes to contain a timestamped error within the failed
+setup interval. For a new controlled Maven case, obtain repository-owner
+approval for one failing, sanitized test on a disposable PR and a signed completed
+delivery for its authorized workflow. Keep the source in process.

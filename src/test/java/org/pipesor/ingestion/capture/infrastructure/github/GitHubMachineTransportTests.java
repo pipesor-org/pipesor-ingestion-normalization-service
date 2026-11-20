@@ -157,12 +157,20 @@ class GitHubMachineTransportTests {
         mode = "reusable-job";
         var members = new HashMap<String,byte[]>();
         for (var name : List.of("0_publish _ publish.txt", "publish _ publish/system.txt",
-                "1_verify.txt", "verify/system.txt")) members.put(name, new byte[8]);
+                "1_verify.txt", "verify/system.txt")) members.put(name, "fixture!".getBytes(StandardCharsets.UTF_8));
         archive = zip(members);
         var transport = archiveAdapter(4096, 128, 8, 16);
         var result = transport.readStepLogs(request);
         assertTrue(result.logs().isEmpty());
+        assertEquals("701", result.aggregates().getFirst().jobId());
+        assertEquals("1_verify.txt", result.aggregates().getFirst().member());
+        assertArrayEquals(members.get("1_verify.txt"), result.aggregates().getFirst().bytes());
         assertEquals("publish / publish", result.run().jobs().getLast().name());
+        members.put("2_verify.txt", members.get("1_verify.txt"));
+        archive = zip(members);
+        failure(UNAVAILABLE, () -> transport.readStepLogs(request));
+        members.remove("2_verify.txt");
+        archive = zip(members);
         mode = "reusable-collision";
         failure(UNAVAILABLE, () -> transport.readStepLogs(request));
         mode = "reusable-job";

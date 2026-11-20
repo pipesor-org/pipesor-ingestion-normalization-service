@@ -453,6 +453,30 @@ class CapturePersistenceTests {
         assertEquals(receipt.evidenceMessageId(), broker.sent.getLast().id());
         assertArrayEquals(bytes, broker.sent.getLast().body()); assertFalse(captured.getAll().contains("synthetic-private-password"));
     }
+    @Test void aggregateReceiptFreezesProtectedOriginalLineProvenance() throws Exception {
+        var receipt = pilotReceipt();
+        var source = pilotLogs(receipt, true);
+        var raw = new String(source.logs().getFirst().bytes(), StandardCharsets.UTF_8)
+                .replace("on project ingestion: failure", "on project ingestion: password=synthetic-private-password");
+        var member = new GitHubMachineCapture.AggregateLog("129926055075", "0_verify.txt", raw.getBytes(StandardCharsets.UTF_8));
+        var operation = coordinator(request -> new GitHubMachineCapture.StepLogs(source.run(), List.of(), List.of(member)),
+                new BoundedEvidenceProtection("bounded-v1", 100000, 100000, 100), 120000);
+        var plan = operation.prepare(new Claim(receipt.id(), UUID.randomUUID(), NOW.plusSeconds(30)), NOW.plusSeconds(120));
+        String locator = (String) scalar("select fragment_locator from ingestion.publication_outputs where id=?", receipt.evidenceMessageId());
+        byte[] body = (byte[]) scalar("select payload from ingestion.publication_outputs where id=?", receipt.evidenceMessageId());
+        String wire = new String(body, StandardCharsets.UTF_8);
+        assertTrue(locator.startsWith("v2:job:129926055075:member:0_verify.txt:lines:4-4:sha256:"));
+        assertTrue(wire.contains(locator)); assertTrue(wire.contains("\"schema_version\":\"2.1\""));
+        assertTrue(wire.contains("[redacted]")); assertFalse(wire.contains("synthetic-private-password"));
+        assertTrue(publish(plan)); assertTrue(publish(plan));
+        assertArrayEquals(body, broker.sent.getLast().body());
+        if (Boolean.getBoolean("pipesor.test.exportAggregate")) {
+            var directory = java.nio.file.Files.createDirectories(java.nio.file.Path.of("target", "synthetic-aggregate"));
+            java.nio.file.Files.write(directory.resolve("evidence.json"), body);
+            java.nio.file.Files.write(directory.resolve("snapshot.json"), broker.sent.getFirst().body());
+        }
+    }
+
     @Test void archiveWithoutBoundStepEvidenceRemainsUnsupportedWithNoFrozenPlan() throws Exception {
         var receipt = pilotReceipt();
         var operation = coordinator(request -> new GitHubMachineCapture.StepLogs(pilotLogs(receipt, false).run(), List.of()),

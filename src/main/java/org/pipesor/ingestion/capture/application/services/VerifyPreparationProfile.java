@@ -32,18 +32,23 @@ public final class VerifyPreparationProfile {
     }
 
     public Classified classify(StepLogs source) {
-        // A retained aggregate-only archive is readable but provides no proven step for this profile.
-        if (source == null || source.run() == null || source.logs().isEmpty()) { throw invalid(); }
+        if (source == null || source.run() == null) { throw invalid(); }
         Run run = source.run();
         var request = run.request();
         if (request == null || !"1446318020".equals(request.scope().repositoryId())
-                || !"412504984".equals(request.scope().workflowId()) || !"completed".equals(run.status())
+                || !Set.of("412504984", "414901007").contains(request.scope().workflowId()) || !"completed".equals(run.status())
                 || !("success".equals(run.conclusion()) || failed(run.conclusion()))
                 || run.updatedAt() == null || run.startedAt() == null) { throw invalid(); }
         var jobs = run.jobs().stream().filter(job -> "verify".equals(job.name())).toList();
-        if (jobs.size() != 1 || run.jobs().size() != 1) { throw invalid(); }
+        if (jobs.size() != 1) { throw invalid(); }
         Job job = jobs.getFirst();
         if (!"completed".equals(job.status()) || !sameOutcome(run.conclusion(), job.conclusion())) { throw invalid(); }
+        if (!source.aggregates().isEmpty() && failed(job.conclusion())) {
+            if (run.jobs().stream().anyMatch(other -> other != job && !("skipped".equals(other.conclusion()) || "success".equals(other.conclusion())))) { throw invalid(); }
+            return aggregate(source, job);
+        }
+        if (run.jobs().size() != 1) { throw invalid(); }
+        if (!"412504984".equals(request.scope().workflowId())) { throw invalid(); }
         var numbers = new HashSet<Integer>();
         for (var step : job.steps()) { if (!numbers.add(step.number())) { throw invalid(); } }
         Step maven = step(job, 4, MAVEN), image = step(job, 5, IMAGE);
@@ -99,6 +104,50 @@ public final class VerifyPreparationProfile {
         return new Classified(observation, locator);
     }
 
+    private Classified aggregate(StepLogs source, Job job) {
+        var run = source.run();
+        if (!failed(job.conclusion()) || source.aggregates().size() != 1) { throw invalid(); }
+        var member = source.aggregates().getFirst();
+        byte[] bytes = member.bytes();
+        if (!job.id().equals(member.jobId()) || !member.member().matches("[0-9]{1,9}_verify\\.txt")
+                || bytes.length > maxInputBytes || job.startedAt() == null || job.completedAt() == null) { throw invalid(); }
+        var failures = job.steps().stream().filter(s -> failed(s.conclusion())).toList();
+        if (failures.size() != 1) { throw invalid(); }
+        var failedStep = failures.getFirst();
+        boolean setup = "Set up job".equals(failedStep.name());
+        if (!setup && !MAVEN.equals(failedStep.name())) { throw invalid(); }
+        if (!"completed".equals(failedStep.status())) { throw invalid(); }
+        times(failedStep);
+        var sourceLines = lines(bytes);
+        Line selected = null;
+        int number = 0;
+        StageName stage = StageName.INFRASTRUCTURE;
+        for (int i = 0; i < sourceLines.size(); i++) {
+            var line = sourceLines.get(i);
+            var match = FAILURE.matcher(line.text());
+            if (setup ? !line.text().matches("##\\[error\\]\\s*\\S.*") : !match.matches()) { continue; }
+            if (selected != null || line.raw().length() > 4096 || line.time().isBefore(failedStep.startedAt())
+                    || !line.time().isBefore(failedStep.completedAt().plusSeconds(1))) { throw invalid(); }
+            if (!setup) { stage = stage(plugin(match.group(1)), match.group(3)); }
+            selected = line;
+            number = i + 1;
+        }
+        if (selected == null) { throw invalid(); }
+        String digest;
+        try {
+            digest = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(selected.raw().getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+        String locator = "v2:job:" + job.id() + ":member:" + member.member() + ":lines:" + number + "-" + number + ":sha256:" + digest;
+        var request = run.request();
+        var observation = new WorkflowObservation(request.scope().context(), request.scope().pipeline(),
+                new Execution(request.runId(), request.attempt(), run.branch(), run.status(), run.conclusion(), run.startedAt(), null),
+                run.commitSha(), null, null, request.correlationId(), run.updatedAt(), run.updatedAt(),
+                List.of(), new Failure(stage, setup ? "Job setup reported an error" : "Maven goal reported a failure", selected.time()),
+                new Evidence(stage, job.id(), selected.raw(), null, locator));
+        return new Classified(observation, locator);
+    }
+
     private static boolean failed(String conclusion) { return conclusion != null && FAILED.contains(conclusion); }
     private static boolean sameOutcome(String run, String job) { return run.equals(job) || failed(run) && failed(job); }
     private static Step step(Job job, int number, String name) {
@@ -125,6 +174,7 @@ public final class VerifyPreparationProfile {
             int end = newline < 0 ? text.length() : newline + 1;
             String raw = text.substring(offset, end);
             String value = raw.stripTrailing();
+            if (offset == 0 && value.startsWith("\uFEFF")) { value = value.substring(1); }
             int separator = value.indexOf(' ');
             if (separator < 1) { throw invalid(); }
             Instant time;
