@@ -32,7 +32,8 @@ public final class VerifyPreparationProfile {
     }
 
     public Classified classify(StepLogs source) {
-        if (source == null || source.run() == null || source.logs() == null) { throw invalid(); }
+        // A retained aggregate-only archive is readable but provides no proven step for this profile.
+        if (source == null || source.run() == null || source.logs().isEmpty()) { throw invalid(); }
         Run run = source.run();
         var request = run.request();
         if (request == null || !"1446318020".equals(request.scope().repositoryId())

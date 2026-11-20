@@ -1,5 +1,6 @@
 package org.pipesor.ingestion.github.infrastructure.custody;
 
+import com.azure.core.credential.TokenCredential;
 import com.azure.core.http.HttpClient;
 import com.azure.core.util.HttpClientOptions;
 import com.azure.core.http.policy.FixedDelayOptions;
@@ -16,8 +17,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 import org.pipesor.ingestion.github.application.ports.GitHubCredentialCustody;
 import org.pipesor.ingestion.github.application.ports.GitHubUserTokens.Pair;
 import org.pipesor.ingestion.github.domain.model.valueobjects.SecretReference;
@@ -59,11 +62,15 @@ public final class KeyVaultCredentialCustody implements GitHubCredentialCustody 
 
     /** Explicit managed identity and transport budgets; a write with a lost response must not be repeated automatically. */
     public static SecretClient managedIdentityClient(URI approvedVault, Duration timeout) {
+        return secretClient(approvedVault, timeout, () -> new ManagedIdentityCredentialBuilder().build());
+    }
+
+    public static SecretClient secretClient(URI approvedVault, Duration timeout, Supplier<TokenCredential> credential) {
         try {
             var vault = validateVault(approvedVault);
             if (timeout == null || timeout.isZero() || timeout.isNegative()) { throw new IllegalArgumentException(); }
             return new SecretClientBuilder().vaultUrl(vault.toString())
-                    .credential(new ManagedIdentityCredentialBuilder().build())
+                    .credential(Objects.requireNonNull(credential.get()))
                     .httpClient(HttpClient.createDefault(new HttpClientOptions().setConnectTimeout(timeout)
                             .setReadTimeout(timeout).setResponseTimeout(timeout).setWriteTimeout(timeout)))
                     .retryOptions(new RetryOptions(new FixedDelayOptions(0, Duration.ZERO)))

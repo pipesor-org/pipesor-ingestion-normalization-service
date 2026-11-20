@@ -453,6 +453,20 @@ class CapturePersistenceTests {
         assertEquals(receipt.evidenceMessageId(), broker.sent.getLast().id());
         assertArrayEquals(bytes, broker.sent.getLast().body()); assertFalse(captured.getAll().contains("synthetic-private-password"));
     }
+    @Test void archiveWithoutBoundStepEvidenceRemainsUnsupportedWithNoFrozenPlan() throws Exception {
+        var receipt = pilotReceipt();
+        var operation = coordinator(request -> new GitHubMachineCapture.StepLogs(pilotLogs(receipt, false).run(), List.of()),
+                input -> { throw new AssertionError("Unbound evidence reached protection"); }, 120000);
+        var worker = new PreparationWorker((now, limit, after) -> List.of(receipt.id()), operation, clock, 1, Duration.ofSeconds(5));
+        var result = worker.tick(UUID.randomUUID(), NOW.plusSeconds(30), NOW.plusSeconds(120));
+        assertEquals(1, result.unsupported());
+        assertEquals(0, result.prepared());
+        assertEquals("ACCEPTED", ledger.receipt(receipt.id()).phase());
+        assertNull(ledger.receipt(receipt.id()).observationId());
+        assertEquals(0L, scalar("select count(*) from ingestion.publication_outputs where id in (?,?)",
+                receipt.snapshotMessageId(), receipt.evidenceMessageId()));
+    }
+
     @Test void preparationRejectsCrossReceiptSourceBeforeProtection() throws Exception {
         var receipt = pilotReceipt(); var other = pilotReceipt();
         var operation = coordinator(request -> pilotLogs(other, false), input -> { throw new AssertionError("Crossing reached protection"); }, 120000);

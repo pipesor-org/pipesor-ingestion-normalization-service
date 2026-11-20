@@ -146,10 +146,22 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
     }
     private List<StepLog> stepLogs(Run run,byte[] archive,Session session){
         var expected=new HashMap<String,StepLog>();var jobs=new HashSet<String>();
+        var systemLogs = new HashSet<String>();
         for(var job:run.jobs()){
-            if(!safeArchiveComponent(job.name())||!jobs.add(job.name()))throw new CaptureFailure(UNAVAILABLE);
+            String directory = archiveJobDirectory(job.name());
+            if (!jobs.add(directory)) throw new CaptureFailure(UNAVAILABLE);
+            systemLogs.add(directory + "/system.txt");
+            // A rewritten job label identifies ancillary files only. It cannot bind an evidence member.
+            if (!directory.equals(job.name())) continue;
             for(var step:job.steps()){
-                if(!safeArchiveComponent(step.name())||expected.put(job.name()+"/"+step.number()+"_"+step.name()+".txt",new StepLog(job.id(),step.number(),new byte[0]))!=null)throw new CaptureFailure(UNAVAILABLE);
+                // Action display labels often contain '/'. Only literal single components can bind a ZIP member.
+                if (!safeArchiveComponent(step.name())) {
+                    if (!Arrays.stream(step.name().split("/", -1)).allMatch(GitHubMachineTransport::safeArchiveComponent)) {
+                        throw new CaptureFailure(UNAVAILABLE);
+                    }
+                    continue;
+                }
+                if(expected.put(job.name()+"/"+step.number()+"_"+step.name()+".txt",new StepLog(job.id(),step.number(),new byte[0]))!=null)throw new CaptureFailure(UNAVAILABLE);
             }
         }
         var central=centralNames(archive,session);var seen=new HashSet<String>();var result=new ArrayList<StepLog>();int expanded=0,count=0;
@@ -159,7 +171,7 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
                 if(++count>archiveLimits.maxEntries()||!seen.add(name)||!central.remove(name))throw new CaptureFailure(UNAVAILABLE);
                 var selected=expected.get(name);boolean folder=entry.isDirectory()&&jobs.contains(name.substring(0,name.length()-1));
                 boolean aggregate=jobs.stream().anyMatch(job->name.matches("[0-9]+_"+java.util.regex.Pattern.quote(job)+"\\.txt"));
-                if(selected==null&&!folder&&!aggregate)throw new CaptureFailure(UNAVAILABLE);
+                if(selected==null&&!folder&&!aggregate&&!systemLogs.contains(name))throw new CaptureFailure(UNAVAILABLE);
                 var bytes=new ByteArrayOutputStream();var buffer=new byte[8192];int read;
                 while((read=zip.read(buffer))!=-1){
                     session.check();if(read>archiveLimits.maxExpandedBytes()-expanded||folder&&read>0||selected!=null&&read>archiveLimits.maxStepBytes()-bytes.size())throw new CaptureFailure(UNAVAILABLE);
@@ -171,6 +183,15 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
         }catch(IOException|IllegalArgumentException invalid){throw new CaptureFailure(UNAVAILABLE);}
         if(count==0||!central.isEmpty())throw new CaptureFailure(UNAVAILABLE);
         return List.copyOf(result);
+    }
+    private static String archiveJobDirectory(String name) {
+        if (safeArchiveComponent(name)) return name;
+        // GitHub's current CI ZIP spells the reusable job "publish / publish" as "publish _ publish".
+        String[] parts = name.split(" / ", -1);
+        if (parts.length != 2 || !Arrays.stream(parts).allMatch(GitHubMachineTransport::safeArchiveComponent)) {
+            throw new CaptureFailure(UNAVAILABLE);
+        }
+        return String.join(" _ ", parts);
     }
     private static boolean safeArchiveComponent(String value){return value!=null&&!value.isBlank()&&!Set.of(".","..").contains(value)&&value.indexOf('/')<0&&value.indexOf('\\')<0&&value.chars().noneMatch(c->c<32||c==127);}
     private static void strictUtf8(byte[] bytes){try{java.nio.charset.StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes));}catch(java.nio.charset.CharacterCodingException invalid){throw new CaptureFailure(UNAVAILABLE);}}
@@ -211,7 +232,8 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
                 if(body==null)builder.GET();else builder.header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(body));
                 int available=download?limit:Math.min(limit,remaining);if(available<1)throw new CaptureFailure(UNAVAILABLE);
                 pending=client.sendAsync(builder.build(),info->new Bounded(available));var response=pending.get(nanos,TimeUnit.NANOSECONDS);check();authorized();check();if(!download)remaining-=response.body().length;
-                if(response.statusCode()==404)throw new CaptureFailure(SCOPE_CHANGED);
+                // An authorized attempt can have no retained archive. Its log or CDN 404 cannot prove scope loss.
+                if(response.statusCode()==404 && expected!=302 && !download)throw new CaptureFailure(SCOPE_CHANGED);
                 if(response.body().length>available || response.statusCode()!=expected || response.headers().firstValue("X-GitHub-SSO").isPresent())throw new CaptureFailure(UNAVAILABLE);
                 if(expected!=302&&!download&&!Set.of("application/json","application/vnd.github+json").contains(response.headers().firstValue("Content-Type").orElse("").split(";",2)[0].strip().toLowerCase(Locale.ROOT)))throw new CaptureFailure(UNAVAILABLE);
                 return response;

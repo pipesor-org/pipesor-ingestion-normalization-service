@@ -21,6 +21,18 @@ The opt-in [machine/webhook adapters](docs/deployment-contract.md#machine-and-we
 - [Cross-service contracts](docs/deployment-contract.md#cross-service-contract-proposals--2026-11-08): locally approved execution/evidence, routing and connector design; consumer adaptation and concrete capture/browser/runtime inputs remain pending.
 - [AGENTS.md](AGENTS.md): repository instructions for coding agents.
 
+## Read-only GitHub acquisition control
+
+From this checkout, after an operator supplies the authority file and approved vault references in the [acquisition handoff](docs/deployment-contract.md#real-github-acquisition-controls), run one named historical control:
+
+```bash
+./mvnw -B -ntp test-compile org.apache.maven.plugins:maven-dependency-plugin:3.10.0:build-classpath -DincludeScope=test -Dmdep.outputFile=target/acquisition-test.cp
+java -cp "target/test-classes:target/classes:$(cat target/acquisition-test.cp)" \
+  org.pipesor.ingestion.configuration.GitHubAcquisitionControl "$PIPESOR_CONTROL_PROPERTIES" 42843891934
+```
+
+The test-classpath command uses the actual Java machine transport and file-backed authority. Its only outputs on success are source identifiers, job and bound-step counts, and the Verify profile's classification. An unsupported profile after a successful read exits zero. An unavailable or denied read exits nonzero. The command starts no application, ledger, publisher or workflow.
+
 ## Development and verification
 
 The [development baseline](docs/deployment-contract.md#development-baseline) records the selected toolchain and dependency policy. The [entry point](src/main/java/org/pipesor/ingestion/IngestionServiceApplication.java), [query configuration](src/main/java/org/pipesor/ingestion/configuration/GitHubConfiguration.java) and [metadata configuration](src/main/java/org/pipesor/ingestion/configuration/GitHubPersistenceConfiguration.java) compose the application with an HTTP listener and required explicit identity/limit settings. Optional capture, messaging and protection are disabled by default; missing query ports leave queries unavailable, without successful fallbacks. Domain/application and shared domain identity remain independent of Spring, HTTP and ORM.
