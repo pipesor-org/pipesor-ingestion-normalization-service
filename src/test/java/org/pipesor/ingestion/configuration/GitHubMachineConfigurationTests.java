@@ -16,6 +16,7 @@ import org.pipesor.ingestion.capture.infrastructure.github.*;
 import org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook;
 import org.pipesor.ingestion.github.application.ports.*;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.mock.env.MockEnvironment;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -54,6 +55,27 @@ class GitHubMachineConfigurationTests {
         Files.writeString(file,"private-source-broken");deps().withPropertyValues(props(settings())).run(c->{var cause=assertInstanceOf(CaptureFailure.class,root(c.getStartupFailure()));assertEquals(CaptureFailure.Reason.UNAVAILABLE,cause.reason());assertNull(cause.getCause());});
         Files.delete(file);deps().withPropertyValues(props(settings())).run(c->assertEquals(CaptureFailure.Reason.UNAVAILABLE,assertInstanceOf(CaptureFailure.class,root(c.getStartupFailure())).reason()));
     }
+    @Test void manualAcquisitionHonorsDisabledMissingAndDeniedAuthority() throws Exception {
+        var env = new MockEnvironment();
+        String run = "42843891934";
+        assertThrows(IllegalArgumentException.class, () -> GitHubAcquisitionControl.check(env, run));
+        settings().forEach((key, value) -> env.setProperty("ingestion.github-machine." + key, value));
+        env.setProperty("ingestion.github-machine.enabled", "true");
+        env.setProperty("ingestion.github-machine.app-id", "5722735");
+        env.setProperty("control.scope-revision", "offline-revision");
+        env.setProperty("control.azure-tenant", UUID.randomUUID().toString());
+        env.setProperty("control.azure-subscription", UUID.randomUUID().toString());
+        env.setProperty("ingestion.protection.max-input-bytes", "1024");
+        env.setProperty("ingestion.capture-preparation.max-compressed-bytes", "2048");
+        env.setProperty("ingestion.capture-preparation.max-expanded-bytes", "100000");
+        env.setProperty("ingestion.capture-preparation.max-archive-entries", "4");
+        assertEquals(CaptureFailure.Reason.SCOPE_CHANGED,
+                assertThrows(CaptureFailure.class, () -> GitHubAcquisitionControl.check(env, run)).reason());
+        Files.delete(file);
+        assertEquals(CaptureFailure.Reason.UNAVAILABLE,
+                assertThrows(CaptureFailure.class, () -> GitHubAcquisitionControl.check(env, run)).reason());
+    }
+
     @Test void enablingWithoutCaptureHandlerCannotInstallAPermissiveFallback(){
         runner.withBean(Clock.class,Clock::systemUTC).withPropertyValues(props(settings())).run(c->{var missing=assertInstanceOf(org.springframework.beans.factory.NoSuchBeanDefinitionException.class,root(c.getStartupFailure()));assertEquals(CaptureHandler.class,missing.getBeanType());});
     }

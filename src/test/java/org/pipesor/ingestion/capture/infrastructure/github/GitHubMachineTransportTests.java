@@ -62,6 +62,9 @@ class GitHubMachineTransportTests {
                 if(reads>1&&mode.equals("changed-sha"))body=body.replace("a".repeat(40),"b".repeat(40));
                 if(download!=null&&mode.equals("changed-after-log"))body=body.replace("11:03:00.987654321Z","11:04:00.987654321Z");
             }
+            if(mode.equals("missing-archive")&&path.endsWith("/logs")){status=404;}
+            if(mode.equals("changed-attempt-after-log")&&download!=null&&path.endsWith("/attempts/3"))body=body.replace("\"run_attempt\":3","\"run_attempt\":4");
+            if(mode.equals("action-label")&&path.endsWith("/jobs"))body=body.replace("step-1","Run actions/checkout@fixture");
             if(mode.equals("rate")&&path.equals("/installation/repositories")){status=403;body="private-rate-details";}
             if(mode.equals("malformed")&&path.equals("/installation/repositories"))body="private-unparseable";
             if(mode.equals("trailing")&&path.equals("/app"))body+=" {}";
@@ -119,13 +122,51 @@ class GitHubMachineTransportTests {
         var bytes=new java.io.ByteArrayOutputStream();try(var zip=new java.util.zip.ZipOutputStream(bytes)){for(var entry:entries.entrySet()){zip.putNextEntry(new java.util.zip.ZipEntry(entry.getKey()));zip.write(entry.getValue());zip.closeEntry();}}return bytes.toByteArray();
     }
     GitHubMachineTransport archiveAdapter(int compressed,int expanded,int entries,int step){return adapter(16000,Duration.ofSeconds(3),true,new GitHubMachineTransport.ArchiveLimits(compressed,expanded,entries,step));}
+    @Test void aggregateAndSystemFilesAreBoundedButNeverSupplyStepEvidence() throws Exception {
+        mode = "action-label";
+        var members = new HashMap<String,byte[]>();
+        members.put("0_job-1.txt", "aggregate".getBytes(StandardCharsets.UTF_8));
+        members.put("job-1/system.txt", new byte[32]);
+        archive = zip(members);
+        var transport = archiveAdapter(4096, 128, 3, 16);
+        var result = transport.readStepLogs(request);
+        assertEquals("Run actions/checkout@fixture", result.run().jobs().getFirst().steps().getFirst().name());
+        assertTrue(result.logs().isEmpty());
+        assertEquals(3, runReads.get());
+        failure(UNAVAILABLE, () -> archiveAdapter(4096, 32, 3, 16).readStepLogs(request));
+
+        members.put("job-2/2_step-2.txt", "bound step".getBytes(StandardCharsets.UTF_8));
+        archive = zip(members);
+        var bound = transport.readStepLogs(request).logs();
+        assertEquals(1, bound.size());
+        assertEquals("702", bound.getFirst().jobId());
+        assertEquals(2, bound.getFirst().stepNumber());
+    }
+
+    @Test void anActionDisplayLabelCannotAuthorizeANestedArchivePath() throws Exception {
+        mode = "action-label";
+        archive = zip(Map.of("job-1/1_Run actions/checkout@fixture.txt", new byte[1]));
+        failure(UNAVAILABLE, () -> archiveAdapter(4096, 128, 3, 16).readStepLogs(request));
+    }
+
+    @Test void missingAttemptArchiveIsUnavailableAndDoesNotFollowTheLocation() {
+        mode = "missing-archive";
+        failure(UNAVAILABLE, () -> archiveAdapter(4096, 128, 3, 16).readStepLogs(request));
+        assertNull(download);
+    }
+
+    @Test void aggregateOnlyArchiveStillChecksAttemptAfterDownload() throws Exception {
+        mode = "changed-attempt-after-log";
+        archive = zip(Map.of("0_job-1.txt", new byte[5], "job-1/system.txt", new byte[5]));
+        failure(SCOPE_CHANGED, () -> archiveAdapter(4096, 128, 3, 16).readStepLogs(request));
+    }
     @Test void bindsPerStepArchiveToActualAttemptAndKeepsAggregatePrivate(CapturedOutput output) throws Exception {
         archive=zip(Map.of("0_job-1.txt","aggregate-never-step".getBytes(StandardCharsets.UTF_8),"job-1/1_step-1.txt","2026-11-10T11:01:03Z phase α".getBytes(StandardCharsets.UTF_8),"job-2/2_step-2.txt","different step 😀".getBytes(StandardCharsets.UTF_8)));
         var result=archiveAdapter(4096,4096,8,1024).readStepLogs(request);
         assertEquals(request,result.run().request());assertEquals(2,result.logs().size());var first=result.logs().stream().filter(l->l.jobId().equals("701")).findFirst().orElseThrow();assertEquals(1,first.stepNumber());assertEquals("2026-11-10T11:01:03Z phase α",new String(first.bytes(),StandardCharsets.UTF_8));
         var copy=first.bytes();copy[0]=0;assertEquals('2',first.bytes()[0]);assertThrows(UnsupportedOperationException.class,()->result.logs().clear());assertTrue(download.headers().map().isEmpty());assertFalse(output.getAll().contains("phase α"));assertFalse(first.toString().contains("phase"));assertEquals(3,runReads.get());
     }
-    @ParameterizedTest @ValueSource(strings={"../escape.txt","job-1/../1_step-1.txt","job-1/2_step-1.txt","job-1/1_other-name.txt","unknown/1_step-1.txt","job-1\\1_step-1.txt"})
+    @ParameterizedTest @ValueSource(strings={"../escape.txt","job-1/../1_step-1.txt","job-1/2_step-1.txt","job-1/1_other-name.txt","unknown/1_step-1.txt","job-1\\1_step-1.txt","unknown/system.txt","job-1/other/system.txt"})
     void rejectsUnprovenArchivePathsWithoutReturningAnyEvidence(String path) throws Exception {archive=zip(Map.of(path,"private archive".getBytes(StandardCharsets.UTF_8)));failure(UNAVAILABLE,()->archiveAdapter(4096,4096,8,1024).readStepLogs(request));}
     @Test void refusesCompressionExpansionEntryAndStepBudgets() throws Exception {
         archive=zip(Map.of("job-1/1_step-1.txt",new byte[8192]));

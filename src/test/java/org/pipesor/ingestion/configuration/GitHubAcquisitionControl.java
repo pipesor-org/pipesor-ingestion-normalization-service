@@ -1,0 +1,95 @@
+package org.pipesor.ingestion.configuration;
+
+import com.azure.identity.AzureCliCredentialBuilder;
+import java.time.Clock;
+import java.util.Map;
+import java.util.UUID;
+import org.pipesor.ingestion.capture.application.ports.CurrentMachineScope;
+import org.pipesor.ingestion.capture.application.ports.GitHubMachineCapture.Request;
+import org.pipesor.ingestion.capture.application.ports.GitHubMachineCapture.Run;
+import org.pipesor.ingestion.capture.domain.exceptions.CaptureFailure;
+import org.pipesor.ingestion.capture.domain.model.valueobjects.CaptureScope;
+import org.pipesor.ingestion.capture.infrastructure.github.GitHubMachineTransport;
+import org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook.HookContext;
+import org.pipesor.ingestion.github.infrastructure.custody.KeyVaultCredentialCustody;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.support.ResourcePropertySource;
+import org.springframework.mock.env.MockEnvironment;
+
+/** Manual read-only control. No receipt, listener, publisher or automatic test discovery. */
+public final class GitHubAcquisitionControl {
+    private record Control(String workflow, String conclusion, String job) {
+        void verify(Run run) {
+            boolean jobsMatch = job == null ? run.jobs().isEmpty()
+                    : run.jobs().size() == 1 && job.equals(run.jobs().getFirst().id());
+            if (!jobsMatch || !"completed".equals(run.status()) || !conclusion.equals(run.conclusion())) {
+                throw new CaptureFailure(CaptureFailure.Reason.CONFLICT);
+            }
+        }
+    }
+    private static final Map<String, Control> CONTROLS = Map.of(
+            "42843891934", new Control("412504984", "success", "129926055075"),
+            "43055757606", new Control("412504984", "failure", "130644639649"),
+            "43064316120", new Control("414901007", "failure", null));
+
+    public static void main(String[] args) {
+        if (args.length != 2 || !CONTROLS.containsKey(args[1])) {
+            System.err.println("Expected an operator properties file and a documented control run ID.");
+            System.exit(2);
+        }
+        try {
+            var env = new MockEnvironment();
+            env.getPropertySources().addFirst(new ResourcePropertySource(new FileSystemResource(args[0])));
+            check(env, args[1]);
+        } catch (CaptureFailure failure) {
+            System.err.println("Acquisition refused: " + failure.reason());
+            System.exit(1);
+        } catch (Exception unavailable) {
+            System.err.println("Acquisition configuration or authority unavailable.");
+            System.exit(1);
+        }
+    }
+
+    static void check(MockEnvironment env, String runId) {
+        if (!"true".equals(env.getProperty("ingestion.github-machine.enabled"))) {
+            throw new IllegalArgumentException();
+        }
+        var machine = new GitHubMachineConfiguration();
+        var settings = machine.githubMachineSettings(env);
+        if (!settings.appId().equals("5722735")) throw new IllegalArgumentException();
+        var clock = Clock.systemUTC();
+        var file = machine.githubFileAuthority(settings, clock);
+        var route = new HookContext(settings.domain(), settings.tenant(), settings.appId());
+        var control = CONTROLS.get(runId);
+        var scope = new CaptureScope(route.captureDomain(), route.tenantId(), route.appId(), "341855203",
+                "181117842", "1446318020", control.workflow(), env.getRequiredProperty("control.scope-revision"));
+        CurrentMachineScope authority = candidate -> file.verifyProtectedEvidenceScope(route, candidate.context(), candidate.pipeline());
+        var vault = KeyVaultCredentialCustody.secretClient(settings.vault(), settings.vaultTimeout(), () -> new AzureCliCredentialBuilder()
+                .tenantId(UUID.fromString(env.getRequiredProperty("control.azure-tenant")).toString())
+                .subscription(UUID.fromString(env.getRequiredProperty("control.azure-subscription")).toString())
+                .processTimeout(settings.vaultTimeout()).build());
+        var signer = machine.githubAppJwtSigner(settings, machine.githubAppMaterial(settings, vault), clock);
+        var preparation = new CapturePreparationConfiguration();
+        var profile = preparation.verifyPreparationProfile(env);
+        var transport = new GitHubMachineTransport(authority, signer, settings.appId(), settings.version(),
+                settings.operationBudget(), settings.pageSize(), settings.maxPages(), settings.maxJobs(),
+                settings.maxResponseBytes(), settings.maxLogBytes(), preparation.captureArchiveLimits(env),
+                settings.downloadHosts(), clock);
+        var request = new Request(scope, runId, 1, UUID.randomUUID().toString());
+        if (control.job() == null) {
+            control.verify(transport.readRun(request));
+            System.out.printf("workflow=%s run=%s attempt=1 jobs=0%n", scope.workflowId(), runId);
+        }
+        var source = transport.readStepLogs(request);
+        control.verify(source.run());
+        System.out.printf("workflow=%s run=%s attempt=1 jobs=%d updatedAt=%s boundStepLogs=%d%n",
+                scope.workflowId(), runId, source.run().jobs().size(), source.run().updatedAt(), source.logs().size());
+        try {
+            profile.classify(source);
+            System.out.println("SUPPORTED by Verify v1");
+        } catch (CaptureFailure failure) {
+            if (failure.reason() != CaptureFailure.Reason.INVALID_INPUT) throw failure;
+            System.out.println("UNSUPPORTED by Verify v1");
+        }
+    }
+}
