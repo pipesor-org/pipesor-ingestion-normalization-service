@@ -60,6 +60,10 @@ class MachineScopeHttpTests {
         directory = Files.createTempDirectory("machine-scope-http");
         file = directory.resolve("authority.json");
         Files.writeString(file, AUTHORITY);
+        startServer();
+    }
+
+    private static void startServer() {
         context = new SpringApplicationBuilder(Application.class).initializers(c ->
                 org.springframework.boot.test.util.TestPropertyValues.of(
                     "server.port=0", "server.address=127.0.0.1", "springdoc.api-docs.enabled=false",
@@ -117,6 +121,30 @@ class MachineScopeHttpTests {
         assertEquals(503,unavailable.statusCode(),unavailable.body());
         assertFalse(unavailable.body().contains("private"));
         assertEquals("UNAVAILABLE", JSON.readTree(unavailable.body()).get("code").asString());
+    }
+
+    @Test void checksOnlyTheCurrentFileAndDoesNotDetectRevisionReuse() throws Exception {
+        var bearer = token(Map.of());
+        assertDecision(bearer, "AUTHORIZED");
+        Files.writeString(file, AUTHORITY.replace("machine-r1", "machine-r2"));
+        assertDecision(bearer, "DENIED");
+        Files.writeString(file, AUTHORITY.replace("[\"completed\"]", "[\"in_progress\"]"));
+        assertDecision(bearer, "DENIED");
+        Files.writeString(file, "{");
+        assertEquals(503, post(body(), bearer, CORRELATION).statusCode());
+        Files.writeString(file, AUTHORITY.replace("machine-r1", "machine-r2"));
+        context.close();
+        startServer();
+        assertDecision(bearer, "DENIED");
+        // Restoring the old label makes its tuple current again, even after restart.
+        Files.writeString(file, AUTHORITY.replace("document-r1", "document-r2"));
+        assertDecision(bearer, "AUTHORIZED");
+    }
+
+    private static void assertDecision(String bearer, String decision) throws Exception {
+        var response = post(body(), bearer, CORRELATION);
+        assertEquals(200, response.statusCode(), response.body());
+        assertEquals(decision, JSON.readTree(response.body()).get("decision").asString());
     }
 
     @Test void rejectsBodyMetadataAndExpiryBeforeScopeRead() throws Exception {
