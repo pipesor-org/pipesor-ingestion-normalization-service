@@ -148,8 +148,11 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
         var expected=new HashMap<String,StepLog>();var jobs=new HashSet<String>();
         var systemLogs = new HashSet<String>();
         for(var job:run.jobs()){
-            if(!safeArchiveComponent(job.name())||!jobs.add(job.name()))throw new CaptureFailure(UNAVAILABLE);
-            systemLogs.add(job.name() + "/system.txt");
+            String directory = archiveJobDirectory(job.name());
+            if (!jobs.add(directory)) throw new CaptureFailure(UNAVAILABLE);
+            systemLogs.add(directory + "/system.txt");
+            // A rewritten job label identifies ancillary files only. It cannot bind an evidence member.
+            if (!directory.equals(job.name())) continue;
             for(var step:job.steps()){
                 // Action display labels often contain '/'. Only literal single components can bind a ZIP member.
                 if (!safeArchiveComponent(step.name())) {
@@ -180,6 +183,15 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
         }catch(IOException|IllegalArgumentException invalid){throw new CaptureFailure(UNAVAILABLE);}
         if(count==0||!central.isEmpty())throw new CaptureFailure(UNAVAILABLE);
         return List.copyOf(result);
+    }
+    private static String archiveJobDirectory(String name) {
+        if (safeArchiveComponent(name)) return name;
+        // GitHub's current CI ZIP spells the reusable job "publish / publish" as "publish _ publish".
+        String[] parts = name.split(" / ", -1);
+        if (parts.length != 2 || !Arrays.stream(parts).allMatch(GitHubMachineTransport::safeArchiveComponent)) {
+            throw new CaptureFailure(UNAVAILABLE);
+        }
+        return String.join(" _ ", parts);
     }
     private static boolean safeArchiveComponent(String value){return value!=null&&!value.isBlank()&&!Set.of(".","..").contains(value)&&value.indexOf('/')<0&&value.indexOf('\\')<0&&value.chars().noneMatch(c->c<32||c==127);}
     private static void strictUtf8(byte[] bytes){try{java.nio.charset.StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes));}catch(java.nio.charset.CharacterCodingException invalid){throw new CaptureFailure(UNAVAILABLE);}}

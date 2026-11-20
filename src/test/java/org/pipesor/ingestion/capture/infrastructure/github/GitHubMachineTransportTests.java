@@ -65,6 +65,10 @@ class GitHubMachineTransportTests {
             if(mode.equals("missing-archive")&&path.endsWith("/logs")){status=404;}
             if(mode.equals("changed-attempt-after-log")&&download!=null&&path.endsWith("/attempts/3"))body=body.replace("\"run_attempt\":3","\"run_attempt\":4");
             if(mode.equals("action-label")&&path.endsWith("/jobs"))body=body.replace("step-1","Run actions/checkout@fixture");
+            if(mode.startsWith("reusable-")&&path.endsWith("/jobs")){
+                body=body.replace("job-2", "publish / publish")
+                        .replace("job-1", mode.equals("reusable-collision") ? "publish _ publish" : "verify");
+            }
             if(mode.equals("rate")&&path.equals("/installation/repositories")){status=403;body="private-rate-details";}
             if(mode.equals("malformed")&&path.equals("/installation/repositories"))body="private-unparseable";
             if(mode.equals("trailing")&&path.equals("/app"))body+=" {}";
@@ -147,6 +151,24 @@ class GitHubMachineTransportTests {
         mode = "action-label";
         archive = zip(Map.of("job-1/1_Run actions/checkout@fixture.txt", new byte[1]));
         failure(UNAVAILABLE, () -> archiveAdapter(4096, 128, 3, 16).readStepLogs(request));
+    }
+
+    @Test void recognizesCurrentCiReusableJobAncillariesWithoutBindingStepsThroughAnAlias() throws Exception {
+        mode = "reusable-job";
+        var members = new HashMap<String,byte[]>();
+        for (var name : List.of("0_publish _ publish.txt", "publish _ publish/system.txt",
+                "1_verify.txt", "verify/system.txt")) members.put(name, new byte[8]);
+        archive = zip(members);
+        var transport = archiveAdapter(4096, 128, 8, 16);
+        var result = transport.readStepLogs(request);
+        assertTrue(result.logs().isEmpty());
+        assertEquals("publish / publish", result.run().jobs().getLast().name());
+        mode = "reusable-collision";
+        failure(UNAVAILABLE, () -> transport.readStepLogs(request));
+        mode = "reusable-job";
+        members.put("publish _ publish/2_step-2.txt", new byte[1]);
+        archive = zip(members);
+        failure(UNAVAILABLE, () -> transport.readStepLogs(request));
     }
 
     @Test void missingAttemptArchiveIsUnavailableAndDoesNotFollowTheLocation() {

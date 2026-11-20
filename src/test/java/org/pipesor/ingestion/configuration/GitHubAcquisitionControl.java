@@ -3,8 +3,11 @@ package org.pipesor.ingestion.configuration;
 import com.azure.identity.AzureCliCredentialBuilder;
 import java.time.Clock;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.pipesor.ingestion.capture.application.ports.CurrentMachineScope;
+import org.pipesor.ingestion.capture.application.ports.GitHubMachineCapture.Job;
 import org.pipesor.ingestion.capture.application.ports.GitHubMachineCapture.Request;
 import org.pipesor.ingestion.capture.application.ports.GitHubMachineCapture.Run;
 import org.pipesor.ingestion.capture.domain.exceptions.CaptureFailure;
@@ -18,19 +21,19 @@ import org.springframework.mock.env.MockEnvironment;
 
 /** Manual read-only control. No receipt, listener, publisher or automatic test discovery. */
 public final class GitHubAcquisitionControl {
-    private record Control(String workflow, String conclusion, String job) {
+    private record Control(String workflow, String conclusion, Set<String> jobs) {
         void verify(Run run) {
-            boolean jobsMatch = job == null ? run.jobs().isEmpty()
-                    : run.jobs().size() == 1 && job.equals(run.jobs().getFirst().id());
-            if (!jobsMatch || !"completed".equals(run.status()) || !conclusion.equals(run.conclusion())) {
+            var actual = run.jobs().stream().map(Job::id).collect(Collectors.toSet());
+            if (!jobs.equals(actual) || !"completed".equals(run.status()) || !conclusion.equals(run.conclusion())) {
                 throw new CaptureFailure(CaptureFailure.Reason.CONFLICT);
             }
         }
     }
     private static final Map<String, Control> CONTROLS = Map.of(
-            "42843891934", new Control("412504984", "success", "129926055075"),
-            "43055757606", new Control("412504984", "failure", "130644639649"),
-            "43064316120", new Control("414901007", "failure", null));
+            "42843891934", new Control("412504984", "success", Set.of("129926055075")),
+            "43055757606", new Control("412504984", "failure", Set.of("130644639649")),
+            "43064316120", new Control("414901007", "failure", Set.of()),
+            "44648382520", new Control("414901007", "success", Set.of("135996727127", "135997834911")));
 
     public static void main(String[] args) {
         if (args.length != 2 || !CONTROLS.containsKey(args[1])) {
@@ -76,7 +79,7 @@ public final class GitHubAcquisitionControl {
                 settings.maxResponseBytes(), settings.maxLogBytes(), preparation.captureArchiveLimits(env),
                 settings.downloadHosts(), clock);
         var request = new Request(scope, runId, 1, UUID.randomUUID().toString());
-        if (control.job() == null) {
+        if (control.jobs().isEmpty()) {
             control.verify(transport.readRun(request));
             System.out.printf("workflow=%s run=%s attempt=1 jobs=0%n", scope.workflowId(), runId);
         }
