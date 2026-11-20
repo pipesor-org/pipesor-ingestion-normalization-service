@@ -104,6 +104,8 @@ class VerifyPreparationProfileTests {
         var member = new AggregateLog("991002", "0_verify.txt", (BUILD + raw).getBytes(StandardCharsets.UTF_8));
         var result = profile.classify(new StepLogs(run, List.of(), List.of(member)));
         var hash = java.security.MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8));
+        assertEquals("00ccd430b43032d53ab5e820ef585d43dc2751fe52a39f1f7aac3e0cc377c78b",
+                java.util.HexFormat.of().formatHex(hash));
         assertEquals("v2:job:991002:member:0_verify.txt:lines:2-2:sha256:" + java.util.HexFormat.of().formatHex(hash),
                 result.fragmentLocator());
         assertEquals(raw, result.observation().evidence().excerpt());
