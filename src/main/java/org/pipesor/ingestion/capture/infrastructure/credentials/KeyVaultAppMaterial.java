@@ -37,9 +37,12 @@ public final class KeyVaultAppMaterial {
     }
     public String appId(){return appId;}
     public PrivateKey signingKey() {
+        return decodeSigningKey(read(signing));
+    }
+    public static PrivateKey decodeSigningKey(String material) {
         byte[] der=null,encoded=null;
         try {
-            var pem=read(signing).strip();String label;
+            var pem=material.strip();String label;
             if(pem.startsWith("-----BEGIN RSA PRIVATE KEY-----"))label="RSA PRIVATE KEY";
             else if(pem.startsWith("-----BEGIN PRIVATE KEY-----"))label="PRIVATE KEY";
             else throw new CaptureFailure(UNAVAILABLE);
