@@ -9,12 +9,16 @@ import org.pipesor.ingestion.capture.application.commandhandlers.CaptureHandler;
 import org.pipesor.ingestion.capture.application.commandhandlers.PrepareGitHubCapture;
 import org.pipesor.ingestion.capture.application.commandhandlers.RequestGitHubCapture;
 import org.pipesor.ingestion.capture.application.ports.CurrentMachineScope;
+import org.pipesor.ingestion.capture.application.ports.BrokerPublisher;
+import org.pipesor.ingestion.capture.infrastructure.messaging.LocalPublicationSpool;
 import org.pipesor.ingestion.capture.domain.model.valueobjects.CaptureScope;
 import org.pipesor.ingestion.capture.infrastructure.configuration.GitHubFileAuthority;
 import org.pipesor.ingestion.capture.infrastructure.credentials.LocalAppSigningKey;
 import org.pipesor.ingestion.capture.infrastructure.github.GitHubAppJwtSigner;
 import org.pipesor.ingestion.capture.infrastructure.github.GitHubMachineTransport;
 import org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook.HookContext;
+import org.pipesor.ingestion.github.infrastructure.provider.GitHubReadProvider;
+import org.pipesor.ingestion.github.infrastructure.provider.LocalGitHubUserLink;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -64,9 +68,28 @@ public class LocalGitHubCaptureConfiguration {
                 Set.of("results-receiver.actions.githubusercontent.com"), clock);
     }
 
+    @Bean
+    @ConditionalOnProperty(name = "ingestion.local-capture.user-link-file")
+    LocalGitHubUserLink localGitHubUserLink(Environment env, Clock clock, CaptureScope scope) {
+        return new LocalGitHubUserLink(Path.of(required(env, "user-link-file")), clock, scope.appId());
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "ingestion.local-capture.user-link-file")
+    GitHubReadProvider localUserReadProvider(Environment env, Clock clock, CaptureScope scope, LocalGitHubUserLink link) {
+        return new GitHubReadProvider(link::credential, scope.appId(), required(env, "api-version"),
+                Duration.ofSeconds(12), 100, 8, 500, 4_000_000, clock);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "ingestion.local-capture.spool-directory")
+    BrokerPublisher localPublicationSpool(Environment env) {
+        return new LocalPublicationSpool(Path.of(required(env, "spool-directory")));
+    }
+
     @Bean RequestGitHubCapture requestGitHubCapture(CaptureHandler capture, GitHubMachineTransport github,
-            PrepareGitHubCapture preparation, Clock clock) {
-        return new RequestGitHubCapture(capture, github, preparation, clock);
+            PrepareGitHubCapture preparation, Clock clock, Environment env) {
+        return new RequestGitHubCapture(capture, github, preparation, clock, env.containsProperty(PREFIX + "spool-directory"));
     }
 
     private static String required(Environment env, String name) {

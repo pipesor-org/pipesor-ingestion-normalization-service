@@ -23,13 +23,15 @@ public final class RequestGitHubCapture {
     private final GitHubMachineCapture github;
     private final PrepareGitHubCapture preparation;
     private final Clock clock;
+    private final boolean publishLocally;
 
     public RequestGitHubCapture(CaptureHandler capture, GitHubMachineCapture github,
-            PrepareGitHubCapture preparation, Clock clock) {
+            PrepareGitHubCapture preparation, Clock clock, boolean publishLocally) {
         this.capture = capture;
         this.github = github;
         this.preparation = preparation;
         this.clock = clock;
+        this.publishLocally = publishLocally;
     }
 
     public CaptureReceipt handle(CaptureScope scope, String runId, int attempt, Instant replayUntil,
@@ -48,11 +50,20 @@ public final class RequestGitHubCapture {
                 run.commitSha(), run.status(), run.conclusion());
         var receipt = capture.accept(new Accept(scope, scope, "github_actions", "on-demand:" + alias,
                 authenticatedDigest, runId, attempt, request.correlationId(), replayUntil));
-        if (!"ACCEPTED".equals(receipt.phase())) return receipt;
-        var now = clock.instant();
-        var lease = now.plusSeconds(90);
-        return preparation.prepare(new Claim(receipt.id(), UUID.randomUUID(), lease),
-                now.plus(Duration.ofMinutes(15)), run, recheckCaller);
+        if ("ACCEPTED".equals(receipt.phase())) {
+            var now = clock.instant();
+            receipt = preparation.prepare(new Claim(receipt.id(), UUID.randomUUID(), now.plusSeconds(90)),
+                    now.plus(Duration.ofMinutes(15)), run, recheckCaller);
+        }
+        if (publishLocally && "PREPARED".equals(receipt.phase())) {
+            for (int output = 0; output < 2; output++) {
+                recheckCaller.run();
+                var now = clock.instant();
+                if (!capture.publishNext(receipt.id(), UUID.randomUUID(), now.plusSeconds(20), now.plusSeconds(1))) break;
+            }
+            return capture.findDelivery(scope, "github_actions", "on-demand:" + alias).orElseThrow();
+        }
+        return receipt;
     }
 
     public Optional<String> phase(CaptureScope scope, String runId, int attempt) {

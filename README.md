@@ -536,3 +536,26 @@ read from GitHub's API. Authorization requires a current linked user verified
 as an administrator of that repository, as well as machine capture scope.
 The response reports capture phase. A configured publisher is required to
 deliver the frozen output.
+
+For the local browser session, run `tools/local-pilot-session.py` with the
+pilot Python environment and keep its output files under `~/.config/pipesor-local`.
+Start Ingestion on loopback with `ingestion-runtime.properties`, which includes
+the public session key and delegated API settings. Run the existing React Vite
+server with `PIPESOR_DEMO_INGESTION_PORT=8083` and open the URL from the
+operator-only `browser-session.url` in the local browser. The session uses a
+separate signing key and a short-lived JWT. React removes the bootstrap fragment
+and keeps the session in the current tab. The delegated API still checks the
+JWT signature, tenant, audience, client, expiry and scope.
+
+With Device Flow enabled for the existing GitHub App, run
+`tools/local-pilot-link.py` and approve the device in GitHub with the pilot
+account. The tool verifies GitHub user identity, exact App installation and
+effective repository administration before making the local link available.
+Ingestion reads that link from `ingestion.local-capture.user-link-file` and
+rechecks GitHub access on each analysis. The local session never carries the App
+user grant or the installation credential.
+
+Set `ingestion.local-capture.spool-directory` to an absolute mode-0700 directory
+to deliver the protected envelopes through the existing outbox. Add explicit
+`spring.datasource.*` properties to use a retained PostgreSQL database with the
+live control. Its test still uses temporary storage when no datasource is set.

@@ -20,16 +20,25 @@ import static org.junit.jupiter.api.Assertions.*;
 class LiveLocalCaptureControlTest {
     @Test
     void acquiresAndFreezesVerifiedSource() {
-        try (var postgres = new PostgreSQLContainer("postgres:17.11")) {
-            postgres.start();
-            org.flywaydb.core.Flyway.configure()
-                    .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
+        var propertiesPath = System.getProperty("pipesor.live-capture.properties");
+        var settings = new java.util.Properties();
+        try (var file = java.nio.file.Files.newInputStream(java.nio.file.Path.of(propertiesPath))) {
+            settings.load(file);
+        } catch (java.io.IOException unavailable) {
+            throw new IllegalStateException("Capture settings unavailable");
+        }
+        boolean persistent = settings.containsKey("spring.datasource.url");
+        try (var postgres = persistent ? null : new PostgreSQLContainer("postgres:17.11")) {
+            if (postgres != null) postgres.start();
+            var url = persistent ? settings.getProperty("spring.datasource.url") : postgres.getJdbcUrl();
+            var username = persistent ? settings.getProperty("spring.datasource.username") : postgres.getUsername();
+            var password = persistent ? settings.getProperty("spring.datasource.password") : postgres.getPassword();
+            org.flywaydb.core.Flyway.configure().dataSource(url, username, password)
                     .defaultSchema("ingestion").schemas("ingestion").load().migrate();
             try (var runtime = new SpringApplicationBuilder(IngestionServiceApplication.class)
                     .web(WebApplicationType.NONE).properties(Map.of(
-                            "spring.datasource.url", postgres.getJdbcUrl(),
-                            "spring.datasource.username", postgres.getUsername(),
-                            "spring.datasource.password", postgres.getPassword()))
+                            "spring.datasource.url", url, "spring.datasource.username", username,
+                            "spring.datasource.password", password))
                     .run("--spring.config.additional-location=file:" + System.getProperty("pipesor.live-capture.properties"))) {
                 var authority = runtime.getBean(GitHubFileAuthority.class);
                 var analysis = runtime.getBean(RequestGitHubCapture.class);
@@ -37,8 +46,13 @@ class LiveLocalCaptureControlTest {
                 assertEquals("1446318020", scope.repositoryId());
                 assertEquals("412504984", scope.workflowId());
                 var receipt = analysis.handle(scope, "43055757606", 1, authority.completedReplayUntil(scope), () -> {});
-                assertEquals("PREPARED", receipt.phase());
-                assertEquals("PREPARED", analysis.phase(scope, "43055757606", 1).orElseThrow());
+                var spool = settings.getProperty("ingestion.local-capture.spool-directory");
+                assertEquals(spool == null ? "PREPARED" : "PUBLISHED", receipt.phase());
+                assertEquals(receipt.phase(), analysis.phase(scope, "43055757606", 1).orElseThrow());
+                if (spool != null) {
+                    assertTrue(java.nio.file.Files.isRegularFile(java.nio.file.Path.of(spool, receipt.evidenceMessageId() + ".json")));
+                    assertTrue(java.nio.file.Files.isRegularFile(java.nio.file.Path.of(spool, receipt.snapshotMessageId() + ".json")));
+                }
                 var sql = new JdbcTemplate(runtime.getBean(javax.sql.DataSource.class));
                 var bytes = sql.queryForObject("SELECT payload FROM ingestion.publication_outputs WHERE id = ?",
                         byte[].class, receipt.evidenceMessageId());

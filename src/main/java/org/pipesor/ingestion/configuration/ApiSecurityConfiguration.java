@@ -1,5 +1,10 @@
 package org.pipesor.ingestion.configuration;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyFactory;
+import java.security.interfaces.RSAPublicKey;
+import java.security.spec.X509EncodedKeySpec;
 import java.time.Clock;
 import java.util.Arrays;
 import java.util.Set;
@@ -11,6 +16,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.core.env.Environment;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.core.*;
@@ -64,11 +70,31 @@ public class ApiSecurityConfiguration {
     }
 
     @Bean
-    JwtDecoder apiJwtDecoder(ApiProperties properties) {
+    JwtDecoder apiJwtDecoder(ApiProperties properties, Environment environment) {
         var security = properties.security();
-        var decoder = NimbusJwtDecoder.withJwkSetUri(security.jwkSetUri().toString()).build();
+        var key = environment.getProperty("ingestion.local-capture.session-public-key");
+        var decoder = key == null
+                ? NimbusJwtDecoder.withJwkSetUri(security.jwkSetUri().toString()).build()
+                : localDecoder(environment, security, key);
         decoder.setJwtValidator(validator(security, Clock.systemUTC()));
         return decoder;
+    }
+
+    private static NimbusJwtDecoder localDecoder(Environment environment, ApiProperties.Security security, String keyPath) {
+        if (!environment.getProperty("ingestion.local-capture.enabled", Boolean.class, false)
+                || !"127.0.0.1".equals(environment.getProperty("server.address"))
+                || !"https://pipesor.local/session".equals(security.issuer().toString())) {
+            throw new IllegalStateException("Local JWT authority requires isolated loopback configuration");
+        }
+        try (var keyFile = Files.newInputStream(Path.of(keyPath), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            var encoded = keyFile.readNBytes(8193);
+            if (encoded.length > 8192) throw new IllegalArgumentException();
+            var publicKey = (RSAPublicKey) KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(encoded));
+            if (publicKey.getModulus().bitLength() < 2048) throw new IllegalArgumentException();
+            return NimbusJwtDecoder.withPublicKey(publicKey).build();
+        } catch (java.io.IOException | java.security.GeneralSecurityException | IllegalArgumentException failure) {
+            throw new IllegalStateException("Valid local JWT signing public key required");
+        }
     }
 
     public static OAuth2TokenValidator<Jwt> validator(ApiProperties.Security security, Clock clock) {

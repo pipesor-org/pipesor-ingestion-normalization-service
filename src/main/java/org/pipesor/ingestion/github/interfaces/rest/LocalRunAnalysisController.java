@@ -58,6 +58,14 @@ public final class LocalRunAnalysisController {
         this.selectedAttempt = selectedAttempt;
     }
 
+    @GetMapping("/api/v1/github/local-session")
+    public ResponseEntity<Session> localSession(@AuthenticationPrincipal Jwt token, HttpServletRequest request) {
+        var context = RequestContext.self(token, request, properties.limits(), clock);
+        context.requireLive(clock);
+        if (!scope.tenantId().toString().equals(context.access().tenantId())) throw new ApiFailure(403, "DENIED");
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(new Session(true));
+    }
+
     @GetMapping("/api/v1/github/local-analysis")
     public ResponseEntity<Candidate> discover(@AuthenticationPrincipal Jwt token, HttpServletRequest request) {
         var context = RequestContext.self(token, request, properties.limits(), clock);
@@ -128,6 +136,8 @@ public final class LocalRunAnalysisController {
         if (access == null || !access.admitted() || !access.readable() || !access.administrator()
                 || !scope.accountId().equals(access.accountId())) throw new ApiFailure(403, "DENIED");
     }
+
+    public record Session(boolean authenticated) {}
 
     public record Candidate(String repositoryId, String repository, String workflowId, String runId,
             int attempt, String conclusion, Instant updatedAt, String phase) {}
