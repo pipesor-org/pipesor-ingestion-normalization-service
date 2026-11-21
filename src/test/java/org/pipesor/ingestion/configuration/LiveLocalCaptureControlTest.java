@@ -38,6 +38,7 @@ class LiveLocalCaptureControlTest {
                 assertEquals("412504984", scope.workflowId());
                 var receipt = analysis.handle(scope, "43055757606", 1, authority.completedReplayUntil(scope), () -> {});
                 assertEquals("PREPARED", receipt.phase());
+                assertEquals("PREPARED", analysis.phase(scope, "43055757606", 1).orElseThrow());
                 var sql = new JdbcTemplate(runtime.getBean(javax.sql.DataSource.class));
                 var bytes = sql.queryForObject("SELECT payload FROM ingestion.publication_outputs WHERE id = ?",
                         byte[].class, receipt.evidenceMessageId());

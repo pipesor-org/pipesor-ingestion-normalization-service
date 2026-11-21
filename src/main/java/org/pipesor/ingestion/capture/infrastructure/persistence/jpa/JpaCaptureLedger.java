@@ -12,6 +12,7 @@ import org.pipesor.ingestion.capture.application.commands.CaptureCommands.*;
 import org.pipesor.ingestion.capture.application.ports.*;
 import org.pipesor.ingestion.capture.domain.exceptions.CaptureFailure;
 import org.pipesor.ingestion.capture.domain.model.aggregates.CaptureReceipt;
+import org.pipesor.ingestion.capture.domain.model.valueobjects.CaptureScope;
 import org.pipesor.ingestion.capture.domain.services.ObservationFingerprint;
 import org.pipesor.ingestion.capture.infrastructure.persistence.jpa.CaptureJpaEntities.*;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -55,6 +56,22 @@ public final class JpaCaptureLedger implements CaptureLedger {
     private static Instant technical(Instant value) { return value.truncatedTo(ChronoUnit.MICROS); }
     private static void future(Instant horizon, Instant now) { if (horizon == null || !technical(horizon).isAfter(now)) { throw new CaptureFailure(INVALID_INPUT); } }
     @Override public CaptureReceipt receipt(UUID id) { return execute(() -> row(id, false).snapshot()); }
+
+    @Override public Optional<CaptureReceipt> findDelivery(CaptureScope scope, String source, String deliveryId) {
+        return execute(() -> {
+            var rows = entityManager.createNativeQuery("""
+                    SELECT r.* FROM ingestion.capture_receipts r
+                    JOIN ingestion.capture_delivery_aliases d ON d.receipt_id = r.id
+                    WHERE d.capture_domain = ?1 AND d.source = ?2 AND d.delivery_id = ?3
+                    """, ReceiptRow.class)
+                    .setParameter(1, scope.captureDomain()).setParameter(2, source)
+                    .setParameter(3, deliveryId).getResultList();
+            if (rows.isEmpty()) return Optional.empty();
+            var receipt = ((ReceiptRow) rows.getFirst()).snapshot();
+            if (!scope.equals(receipt.scope())) throw new CaptureFailure(SCOPE_CHANGED);
+            return Optional.of(receipt);
+        });
+    }
 
     @Override public CaptureReceipt accept(Accept command, Instant time) {
         return execute(() -> {

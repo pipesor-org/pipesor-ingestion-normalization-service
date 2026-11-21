@@ -72,7 +72,8 @@ public final class LocalRunAnalysisController {
             authorize(context);
             return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                     .body(new Candidate(scope.repositoryId(), run.fullName(), scope.workflowId(), selectedRun,
-                            selectedAttempt, run.conclusion(), run.updatedAt()));
+                            selectedAttempt, run.conclusion(), run.updatedAt(),
+                            capture.phase(scope, selectedRun, selectedAttempt).orElse(null)));
         } catch (CaptureFailure failure) {
             throw failure.reason() == CaptureFailure.Reason.SCOPE_CHANGED
                     ? new ApiFailure(403, "DENIED") : ApiFailure.unavailable();
@@ -129,7 +130,7 @@ public final class LocalRunAnalysisController {
     }
 
     public record Candidate(String repositoryId, String repository, String workflowId, String runId,
-            int attempt, String conclusion, Instant updatedAt) {}
+            int attempt, String conclusion, Instant updatedAt, String phase) {}
 
     public record Analysis(String runId, int attempt, String phase) {}
 }

@@ -5,6 +5,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.Optional;
 import org.pipesor.ingestion.capture.application.commands.CaptureCommands.Accept;
 import org.pipesor.ingestion.capture.application.commands.CaptureCommands.Claim;
 import org.pipesor.ingestion.capture.application.ports.GitHubMachineCapture;
@@ -42,8 +43,7 @@ public final class RequestGitHubCapture {
         }
         recheckCaller.run();
         // The authenticated API observation has its own receipt identity, separate from webhook deliveries.
-        var alias = digest(scope.tenantId().toString(), scope.appId(), scope.accountId(), scope.installationId(),
-                scope.repositoryId(), scope.workflowId(), runId, Integer.toString(attempt), scope.scopeRevision());
+        var alias = captureKey(scope, runId, attempt);
         var authenticatedDigest = digest("github-api-on-demand", alias, run.updatedAt().toString(),
                 run.commitSha(), run.status(), run.conclusion());
         var receipt = capture.accept(new Accept(scope, scope, "github_actions", "on-demand:" + alias,
@@ -53,6 +53,16 @@ public final class RequestGitHubCapture {
         var lease = now.plusSeconds(90);
         return preparation.prepare(new Claim(receipt.id(), UUID.randomUUID(), lease),
                 now.plus(Duration.ofMinutes(15)), run, recheckCaller);
+    }
+
+    public Optional<String> phase(CaptureScope scope, String runId, int attempt) {
+        return capture.findDelivery(scope, "github_actions", "on-demand:" + captureKey(scope, runId, attempt))
+                .map(CaptureReceipt::phase);
+    }
+
+    private static String captureKey(CaptureScope scope, String runId, int attempt) {
+        return digest(scope.tenantId().toString(), scope.appId(), scope.accountId(), scope.installationId(),
+                scope.repositoryId(), scope.workflowId(), runId, Integer.toString(attempt), scope.scopeRevision());
     }
 
     private static String digest(String... fields) {

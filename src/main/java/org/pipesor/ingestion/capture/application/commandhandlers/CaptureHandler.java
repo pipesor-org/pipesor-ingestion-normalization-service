@@ -3,6 +3,7 @@ package org.pipesor.ingestion.capture.application.commandhandlers;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.pipesor.ingestion.capture.application.commands.CaptureCommands.*;
 import org.pipesor.ingestion.capture.application.ports.*;
@@ -25,6 +26,10 @@ public final class CaptureHandler {
         if (command == null) { throw new CaptureFailure(INVALID_INPUT); }
         verify(command.independentlyAuthorizedScope());
         return ledger.accept(command, clock.instant());
+    }
+    public Optional<CaptureReceipt> findDelivery(CaptureScope expected, String source, String deliveryId) {
+        verify(expected);
+        return ledger.findDelivery(expected, source, deliveryId);
     }
     /** Commit this claim before reading protected upstream data; the returned IDs survive every retry. */
     public CaptureReceipt claimPreparation(Claim command) {
