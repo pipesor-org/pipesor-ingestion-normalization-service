@@ -37,6 +37,11 @@ public final class PrepareGitHubCapture {
     }
 
     public CaptureReceipt prepare(Claim claim, Instant payloadRecoverUntil) {
+        return prepare(claim, payloadRecoverUntil, null, () -> {});
+    }
+
+    CaptureReceipt prepare(Claim claim, Instant payloadRecoverUntil, GitHubMachineCapture.Run expectedRun,
+            Runnable recheckCaller) {
         if (claim == null || payloadRecoverUntil == null || !payloadRecoverUntil.isAfter(clock.instant())) {
             throw new CaptureFailure(INVALID_INPUT);
         }
@@ -51,6 +56,13 @@ public final class PrepareGitHubCapture {
         if (source == null || source.run() == null || !request.equals(source.run().request())) {
             throw new CaptureFailure(CONFLICT);
         }
+        if (expectedRun != null) {
+            var actual = source.run();
+            var bound = new GitHubMachineCapture.Run(expectedRun.request(), actual.fullName(), actual.branch(),
+                    actual.commitSha(), actual.status(), actual.conclusion(), actual.createdAt(),
+                    actual.updatedAt(), actual.startedAt(), actual.jobs());
+            if (!expectedRun.equals(bound)) throw new CaptureFailure(CONFLICT);
+        }
         var classified = profile.classify(source);
         var observation = classified.observation();
         var result = normalizer.handle(new NormalizeObservationCommand(observation, receipt.scope().context(), receipt.scope().pipeline(),
@@ -59,6 +71,7 @@ public final class PrepareGitHubCapture {
             if (output.body().length > maxWireBytes) { throw new CaptureFailure(INVALID_INPUT); }
         }
         receipt.requireClaim(claim.owner(), receipt.claimFence(), clock.instant());
+        recheckCaller.run();
         return capture.prepare(new Prepare(receipt.id(), claim.owner(), receipt.claimFence(), result,
                 observation.evidence() != null && observation.evidence().sourceLocator() != null
                         ? "verify-aggregate-v1" : "verify-preparation-v1", protectionVersion, classified.fragmentLocator(), payloadRecoverUntil));

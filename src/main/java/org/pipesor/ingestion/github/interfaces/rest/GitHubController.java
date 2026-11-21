@@ -17,12 +17,14 @@ import org.pipesor.ingestion.github.domain.model.valueobjects.*;
 import org.pipesor.ingestion.github.interfaces.rest.resources.GitHubResources;
 import org.pipesor.ingestion.shared.interfaces.rest.*;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @SecurityRequirement(name = "entraDelegated")
 @ApiResponses({
         @ApiResponse(responseCode = "400", description = "Invalid or unsupported request", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiExceptionHandler.Problem.class))),

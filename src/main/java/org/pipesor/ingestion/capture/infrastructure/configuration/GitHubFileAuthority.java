@@ -62,6 +62,19 @@ public final class GitHubFileAuthority implements CurrentMachineScope,Installati
             return Decision.UNAVAILABLE;
         }
     }
+    public Instant completedReplayUntil(CaptureScope scope) {
+        try {
+            return load().machines().stream()
+                    .filter(machine -> scope.equals(machine.scope()) && machine.actions().contains("completed"))
+                    .findFirst().map(machine -> clock.instant().plus(machine.replay()))
+                    .orElseThrow(() -> new CaptureFailure(CaptureFailure.Reason.SCOPE_CHANGED));
+        } catch (CaptureFailure denied) {
+            throw denied;
+        } catch (RuntimeException unavailable) {
+            throw captureUnavailable();
+        }
+    }
+
     @Override public Observation<InstallationAdmission.Request,Boolean> read(InstallationAdmission.Request request) {
         try {
             Objects.requireNonNull(request);var identity=Objects.requireNonNull(request.identity());var context=identity.context();var link=identity.link();
