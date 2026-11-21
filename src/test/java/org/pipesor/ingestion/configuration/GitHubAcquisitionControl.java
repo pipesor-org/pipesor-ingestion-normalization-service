@@ -1,7 +1,18 @@
 package org.pipesor.ingestion.configuration;
 
 import com.azure.identity.AzureCliCredentialBuilder;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
 import java.time.Clock;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -12,6 +23,9 @@ import org.pipesor.ingestion.capture.application.ports.GitHubMachineCapture.Requ
 import org.pipesor.ingestion.capture.application.ports.GitHubMachineCapture.Run;
 import org.pipesor.ingestion.capture.domain.exceptions.CaptureFailure;
 import org.pipesor.ingestion.capture.domain.model.valueobjects.CaptureScope;
+import org.pipesor.ingestion.capture.infrastructure.configuration.GitHubFileAuthority;
+import org.pipesor.ingestion.capture.infrastructure.credentials.KeyVaultAppMaterial;
+import org.pipesor.ingestion.capture.infrastructure.github.GitHubAppJwtSigner;
 import org.pipesor.ingestion.capture.infrastructure.github.GitHubMachineTransport;
 import org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook.HookContext;
 import org.pipesor.ingestion.github.infrastructure.custody.KeyVaultCredentialCustody;
@@ -43,7 +57,11 @@ public final class GitHubAcquisitionControl {
         try {
             var env = new MockEnvironment();
             env.getPropertySources().addFirst(new ResourcePropertySource(new FileSystemResource(args[0])));
-            check(env, args[1]);
+            if (env.containsProperty("control.signing-key-file")) {
+                checkLocal(env, args[1]);
+            } else {
+                check(env, args[1]);
+            }
         } catch (CaptureFailure failure) {
             System.err.println("Acquisition refused: " + failure.reason());
             System.exit(1);
@@ -78,6 +96,63 @@ public final class GitHubAcquisitionControl {
                 settings.operationBudget(), settings.pageSize(), settings.maxPages(), settings.maxJobs(),
                 settings.maxResponseBytes(), settings.maxLogBytes(), preparation.captureArchiveLimits(env),
                 settings.downloadHosts(), clock);
+        classify(scope, runId, control, transport, profile);
+    }
+
+    private static void checkLocal(MockEnvironment env, String runId) {
+        if (!"true".equals(env.getProperty("ingestion.github-machine.enabled"))) {
+            throw new IllegalArgumentException();
+        }
+        var clock = Clock.systemUTC();
+        var tenant = UUID.fromString(env.getRequiredProperty("ingestion.github-machine.webhook-tenant"));
+        var domain = env.getRequiredProperty("ingestion.github-machine.capture-domain");
+        var file = new GitHubFileAuthority(Path.of(env.getRequiredProperty("ingestion.github-machine.authority-file")),
+                "5722735", clock, 65536, 64);
+        file.validate();
+        var route = new HookContext(domain, tenant, "5722735");
+        var control = CONTROLS.get(runId);
+        var scope = new CaptureScope(domain, tenant, route.appId(), "341855203", "181117842",
+                "1446318020", control.workflow(), env.getRequiredProperty("control.scope-revision"));
+        CurrentMachineScope authority = candidate -> file.verifyProtectedEvidenceScope(route, candidate.context(), candidate.pipeline());
+        var keyFile = Path.of(env.getRequiredProperty("control.signing-key-file"));
+        var keyDigest = env.getRequiredProperty("control.signing-key-sha256");
+        var signer = new GitHubAppJwtSigner(route.appId(), () -> localKey(keyFile, keyDigest), clock,
+                Duration.ofMinutes(4), Duration.ofSeconds(30));
+        var preparation = new CapturePreparationConfiguration();
+        var transport = new GitHubMachineTransport(authority, signer, route.appId(),
+                env.getRequiredProperty("ingestion.github-machine.api-version"), Duration.ofSeconds(35),
+                100, 2, 100, 4_000_000, 1_000_000, preparation.captureArchiveLimits(env),
+                Set.of("results-receiver.actions.githubusercontent.com"), clock);
+        classify(scope, runId, control, transport, preparation.verifyPreparationProfile(env));
+    }
+
+    static PrivateKey localKey(Path file, String expectedDigest) {
+        byte[] bytes = null;
+        try {
+            var permissions = Files.getPosixFilePermissions(file, LinkOption.NOFOLLOW_LINKS);
+            if (!file.isAbsolute() || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
+                    || !permissions.equals(Set.of(PosixFilePermission.OWNER_READ))
+                        && !permissions.equals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE))
+                    || !expectedDigest.matches("[0-9a-f]{64}")) {
+                throw new IllegalArgumentException();
+            }
+            try (var stream = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS)) {
+                bytes = stream.readNBytes(16385);
+            }
+            if (bytes.length > 16384 || !MessageDigest.isEqual(HexFormat.of().parseHex(expectedDigest),
+                    MessageDigest.getInstance("SHA-256").digest(bytes))) {
+                throw new IllegalArgumentException();
+            }
+            return KeyVaultAppMaterial.decodeSigningKey(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
+        } catch (IOException | NoSuchAlgorithmException | RuntimeException invalid) {
+            throw new CaptureFailure(CaptureFailure.Reason.UNAVAILABLE);
+        } finally {
+            if (bytes != null) Arrays.fill(bytes, (byte) 0);
+        }
+    }
+
+    private static void classify(CaptureScope scope, String runId, Control control, GitHubMachineTransport transport,
+            org.pipesor.ingestion.capture.application.services.VerifyPreparationProfile profile) {
         var request = new Request(scope, runId, 1, UUID.randomUUID().toString());
         if (control.jobs().isEmpty()) {
             control.verify(transport.readRun(request));
@@ -91,6 +166,9 @@ public final class GitHubAcquisitionControl {
             var result = profile.classify(source);
             System.out.println(result.observation().evidence() != null && result.observation().evidence().sourceLocator() != null
                     ? "SUPPORTED aggregate evidence" : "SUPPORTED by Verify v1");
+            if (result.fragmentLocator() != null) {
+                System.out.println(result.fragmentLocator());
+            }
         } catch (CaptureFailure failure) {
             if (failure.reason() != CaptureFailure.Reason.INVALID_INPUT) throw failure;
             System.out.println("UNSUPPORTED by preparation profiles");
