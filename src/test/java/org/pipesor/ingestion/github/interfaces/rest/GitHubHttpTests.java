@@ -46,6 +46,12 @@ class GitHubHttpTests {
     private static final String FACTS = "Pipeline.GitHubFacts.Read";
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final SyntheticProvider PROVIDER = new SyntheticProvider();
+    private static final List<String> ADMITTED = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private static final org.pipesor.ingestion.github.application.ports.RepositoryAdmissions ADMISSIONS =
+            new org.pipesor.ingestion.github.application.ports.RepositoryAdmissions() {
+        @Override public boolean admitByAdministrator(Admission admission) { return ADMITTED.add(admission.repositoryId()); }
+        @Override public List<String> revokeAbsent(Revocation revocation) { return List.of(); }
+    };
     private static final MutableClock CLOCK = new MutableClock();
     private static PlatformTestIdentity identity;
     private static Path keys;
@@ -60,7 +66,7 @@ class GitHubHttpTests {
             ApiExceptionHandler.class, JwksController.class})
     static class HttpApplication {
         @Bean @Primary Clock testClock() { return CLOCK; }
-        @Bean GitHubQueries queries() { return new GitHubQueryHandler(PROVIDER::link, request -> observed(request, true), PROVIDER, CLOCK); }
+        @Bean GitHubQueries queries() { return new GitHubQueryHandler(PROVIDER::link, request -> observed(request, true), ADMISSIONS, PROVIDER, CLOCK); }
         @Bean GitHubRepositorySelection selections() { return PROVIDER::resolve; }
         @Bean GitHubConnectionQueries connectionQueries() {
             return query -> { PROVIDER.statusIdentity = query.identity(); return Optional.of(new ConnectionStatus(CONNECTION, 7, GENERATION, Instant.now(), Instant.now())); };
@@ -281,6 +287,19 @@ class GitHubHttpTests {
         assertEquals(403, request(base, path, identity.workload(FACTS), null, Map.of()).statusCode());
     }
 
+    @Test void installationsListRepositoryAdmissionForTheDashboard() throws Exception {
+        var response = request(base, "/api/v1/github/installations", identity.session(GITHUB_USER), null, Map.of());
+        assertEquals(200, response.statusCode(), response.body());
+        var installation = JSON.readTree(response.body()).get("installations").get(0);
+        assertEquals("5001", installation.get("installationId").asString());
+        assertEquals("example", installation.get("account").get("login").asString());
+        assertFalse(installation.get("suspended").asBoolean());
+        var repository = installation.get("repositories").get(0);
+        assertEquals("823001", repository.get("repositoryId").asString());
+        for (var field : List.of("fullName", "admitted", "userIsAdmin")) assertTrue(repository.has(field), field);
+        assertEquals(403, request(base, "/api/v1/github/installations", identity.workload(FACTS), null, Map.of()).statusCode());
+    }
+
     @Test void discoveryPreservesVerifiedGenerationContextAndObservationAndRejectsUnboundOrChangedLinks() throws Exception {
         for (String path : List.of(SELF_PATH, "/api/v1/github/repositories/823001/workflows?limit=5")) {
             var response = request(base, path, identity.session(GITHUB_USER), null, Map.of());
@@ -413,6 +432,10 @@ class GitHubHttpTests {
             return observed(request, "github-user");
         }
         @Override public Observation<RepositoryRequest, RepositoryFacts> repository(RepositoryRequest request) { return observed(request, facts(request.repository())); }
+        @Override public Observation<Identity, List<InstallationRepositories>> installations(Identity request) {
+            var repositories = repositories(request).value();
+            return observed(request, List.of(new InstallationRepositories("5001", repositories.get(0).accountId(), "example", true, repositories)));
+        }
         @Override public Observation<Identity, List<RepositoryFacts>> repositories(Identity request) {
             return observed(request, extraRepositories ? List.of(facts(new RepositoryTarget("823001", "5001")), facts(new RepositoryTarget("823002", "5001")))
                     : List.of(facts(new RepositoryTarget("823001", "5001"))));

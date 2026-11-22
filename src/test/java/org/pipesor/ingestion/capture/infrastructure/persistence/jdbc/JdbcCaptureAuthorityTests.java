@@ -119,4 +119,57 @@ class JdbcCaptureAuthorityTests {
         assertNull(webhook.apply(new Source("requested", "181117842", "341855203", "1446318020", "500", "77", 1)));
         assertThrows(IllegalArgumentException.class, () -> authority.webhook(new HookContext(DOMAIN, TENANT, "1")));
     }
+
+    // ADR-024: repository administrator self-service admission on real PostgreSQL.
+    private static org.pipesor.ingestion.github.application.ports.RepositoryAdmissions.Admission adminAdmission(
+            String account, String installation, String repository) {
+        return new org.pipesor.ingestion.github.application.ports.RepositoryAdmissions.Admission(TENANT.toString(), account,
+                installation, repository, TENANT + ":11111111-1111-4111-8111-111111111111", NOW);
+    }
+
+    @Test void administratorAdmissionIsIdempotentAndAudited() {
+        assertTrue(authority.admitByAdministrator(adminAdmission("341855203", "181117842", "900001")));
+        assertFalse(authority.admitByAdministrator(adminAdmission("341855203", "181117842", "900001")), "second call grants nothing");
+        var row = jdbc.queryForMap("select source, admitted_by, admitted_at, revoked_at from ingestion.repository_admissions where repository_id = '900001'");
+        assertEquals("repository_administrator", row.get("source"));
+        assertEquals(TENANT + ":11111111-1111-4111-8111-111111111111", row.get("admitted_by"));
+        assertNull(row.get("revoked_at"));
+        assertTrue(authority.admitted(TENANT, "341855203", new org.pipesor.ingestion.github.domain.model.valueobjects.RepositoryTarget("900001", "181117842")));
+    }
+
+    @Test void administratorAdmissionNeverRebindsAnActiveAdmission() {
+        // The operator admitted 1446318020 for account 341855203 / installation 181117842 (see clean()).
+        assertFalse(authority.admitByAdministrator(adminAdmission("999999999", "777777777", "1446318020")));
+        var row = jdbc.queryForMap("select account_id, installation_id, source from ingestion.repository_admissions where repository_id = '1446318020'");
+        assertEquals("341855203", row.get("account_id"));
+        assertEquals("181117842", row.get("installation_id"));
+        assertEquals("operator", row.get("source"));
+    }
+
+    @Test void revocationRemovesUnlistedRepositoriesFromCaptureAndReadmissionRestoresThem() {
+        var pipeline = UUID.randomUUID();
+        authority.sync(new Sync(TENANT, "1446318020", "500", pipeline, Status.ACTIVE, NOW));
+        var scope = authority.completedScope(DOMAIN, TENANT, "1446318020", "500").orElseThrow();
+        assertTrue(authority.admitByAdministrator(adminAdmission("341855203", "181117842", "900002")));
+
+        // GitHub now lists only 900002 in installation 181117842: 1446318020 was deselected.
+        var revoked = authority.revokeAbsent(new org.pipesor.ingestion.github.application.ports.RepositoryAdmissions.Revocation(
+                TENANT.toString(), "181117842", java.util.Set.of("900002"), TENANT + ":reconciler", NOW));
+        assertEquals(java.util.List.of("1446318020"), revoked);
+        assertFalse(authority.admitted(TENANT, "341855203", new org.pipesor.ingestion.github.domain.model.valueobjects.RepositoryTarget("1446318020", "181117842")));
+        assertTrue(authority.completedScope(DOMAIN, TENANT, "1446318020", "500").isEmpty(), "a revoked repository is not capturable");
+        assertEquals(Decision.CHANGED_OR_LOST, authority.verify(scope));
+        assertTrue(authority.admitted(TENANT, "341855203", new org.pipesor.ingestion.github.domain.model.valueobjects.RepositoryTarget("900002", "181117842")));
+        assertEquals(java.util.List.of(), authority.revokeAbsent(new org.pipesor.ingestion.github.application.ports.RepositoryAdmissions.Revocation(
+                TENANT.toString(), "181117842", java.util.Set.of("900002"), TENANT + ":reconciler", NOW)), "revocation is idempotent");
+
+        // Selected again by its administrator: reactivated and capturable again.
+        assertTrue(authority.admitByAdministrator(adminAdmission("341855203", "181117842", "1446318020")));
+        assertTrue(authority.completedScope(DOMAIN, TENANT, "1446318020", "500").isPresent());
+        // The operator import also restores a revoked admission.
+        authority.revokeAbsent(new org.pipesor.ingestion.github.application.ports.RepositoryAdmissions.Revocation(
+                TENANT.toString(), "181117842", java.util.Set.of(), TENANT + ":reconciler", NOW));
+        authority.importAdmission(TENANT, "341855203", "181117842", "1446318020", "operator", NOW);
+        assertTrue(authority.completedScope(DOMAIN, TENANT, "1446318020", "500").isPresent());
+    }
 }

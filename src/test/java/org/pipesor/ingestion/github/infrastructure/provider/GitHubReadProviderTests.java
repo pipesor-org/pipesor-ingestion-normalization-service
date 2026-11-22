@@ -154,6 +154,17 @@ class GitHubReadProviderTests {
         fail(UNAVAILABLE,()->provider().currentUser(legacy));assertTrue(calls.isEmpty());
         expiry=NOW;fail(CONNECTION_REQUIRED,()->provider().currentUser(IDENTITY));assertTrue(calls.isEmpty());
     }
+    @Test void installationsListOnlyThisAppsInstallationsWithTheirRepositories(){
+        var installations=provider().installations(IDENTITY).value();
+        assertEquals(1,installations.size());
+        assertEquals("81",installations.getFirst().installationId());
+        assertEquals("54",installations.getFirst().accountId());
+        assertTrue(installations.getFirst().active());
+        assertFalse(installations.getFirst().repositories().isEmpty());
+        // An installation of another App is never accepted (ADR-024: only pipesor installations admit repositories).
+        responses.put("/user/installations?per_page=2&page=1",page("installations",INSTALL.replace("\"app_id\":24","\"app_id\":25")));
+        fail(UNAVAILABLE,()->provider().installations(IDENTITY));
+    }
     @Test void actualUserMismatchRejectsBeforeReadingInstallations(){responses.put("/user","{\"id\":55}");fail(CONNECTION_REQUIRED,()->provider().repository(request()));assertEquals(List.of("/user"),calls);}
     @ParameterizedTest @ValueSource(strings={"unauthorized","forbidden","not-found","outage","rate","retry-after","redirect"})
     void statusAndSecurityHeadersNeverProduceEmptySuccessOrLeakProviderErrors(String scenario){

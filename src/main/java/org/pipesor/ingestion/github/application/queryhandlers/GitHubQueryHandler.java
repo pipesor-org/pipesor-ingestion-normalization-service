@@ -4,11 +4,13 @@ import java.time.Clock;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Supplier;
 import org.pipesor.ingestion.github.application.ports.CurrentGitHubLink;
 import org.pipesor.ingestion.github.application.ports.InstallationAdmission;
+import org.pipesor.ingestion.github.application.ports.RepositoryAdmissions;
 import org.pipesor.ingestion.github.application.ports.Observation;
 import org.pipesor.ingestion.github.application.ports.ReadOnlyGitHub;
 import org.pipesor.ingestion.github.application.queries.*;
@@ -20,14 +22,17 @@ import static org.pipesor.ingestion.github.application.services.GitHubAccessFail
 
 public final class GitHubQueryHandler implements GitHubQueries {
     private final CurrentGitHubLink links;
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(GitHubQueryHandler.class);
     private final InstallationAdmission admission;
+    private final RepositoryAdmissions admissions;
     private final ReadOnlyGitHub github;
     private final Clock clock;
 
-    public GitHubQueryHandler(CurrentGitHubLink links, InstallationAdmission admission,
+    public GitHubQueryHandler(CurrentGitHubLink links, InstallationAdmission admission, RepositoryAdmissions admissions,
                               ReadOnlyGitHub github, Clock clock) {
         this.links = Objects.requireNonNull(links);
         this.admission = Objects.requireNonNull(admission);
+        this.admissions = Objects.requireNonNull(admissions);
         this.github = Objects.requireNonNull(github);
         this.clock = Objects.requireNonNull(clock);
     }
@@ -52,15 +57,71 @@ public final class GitHubQueryHandler implements GitHubQueries {
     @Override
     public GitHubViews.Repositories discoverRepositories(DiscoverRepositoriesQuery query) {
         var identity = begin(query.context());
-        var repositories = read(identity, () -> github.repositories(identity));
+        var installations = reconcile(identity);
         var visible = new ArrayList<GitHubViews.Repository>();
-        var seen = new HashSet<RepositoryTarget>();
-        for (var facts : repositories) {
-            if (facts == null || !seen.add(facts.target())) { throw failure(UNAVAILABLE); }
-            if (admitted(identity, facts) && facts.readable()) { visible.add(view(facts)); }
+        for (var installation : installations) {
+            for (var repository : installation.repositories()) {
+                if (repository.admitted() && repository.facts().readable()) { visible.add(view(repository.facts())); }
+            }
         }
         recheck(identity);
         return new GitHubViews.Repositories(query.context(), identity.link(), clock.instant(), visible);
+    }
+
+    @Override
+    public GitHubViews.Installations listInstallations(DiscoverRepositoriesQuery query) {
+        var identity = begin(query.context());
+        var views = reconcile(identity).stream().map(installation -> new GitHubViews.Installation(
+                installation.source().installationId(), installation.source().accountId(), installation.source().accountLogin(),
+                installation.source().active(), installation.repositories().stream().map(repository ->
+                        new GitHubViews.RepositoryAdmission(repository.facts().target().repositoryId(), repository.facts().fullName(),
+                                repository.admitted(), repository.facts().administrator())).toList())).toList();
+        recheck(identity);
+        return new GitHubViews.Installations(query.context(), identity.link(), clock.instant(), views);
+    }
+
+    private record ReconciledRepository(RepositoryFacts facts, boolean admitted) {}
+    private record ReconciledInstallation(ReadOnlyGitHub.InstallationRepositories source, List<ReconciledRepository> repositories) {}
+
+    /**
+     * ADR-024: from facts just read with the subject's token, admit repositories the subject administers in a pipesor
+     * installation and revoke admissions whose repositories the installation no longer lists. Browser data plays no part.
+     */
+    private List<ReconciledInstallation> reconcile(ReadOnlyGitHub.Identity identity) {
+        var installations = read(identity, () -> github.installations(identity));
+        var tenant = identity.context().tenantId();
+        var subject = identity.context().subjectRef();
+        var seen = new HashSet<RepositoryTarget>();
+        var result = new ArrayList<ReconciledInstallation>();
+        for (var installation : installations) {
+            if (installation == null) { throw failure(UNAVAILABLE); }
+            var repositories = new ArrayList<ReconciledRepository>();
+            var listed = new HashSet<String>();
+            for (var facts : installation.repositories()) {
+                if (facts == null || !seen.add(facts.target())
+                        || !installation.installationId().equals(facts.target().installationId())) { throw failure(UNAVAILABLE); }
+                listed.add(facts.target().repositoryId());
+                boolean admitted = admitted(identity, facts);
+                if (!admitted && facts.readable() && facts.administrator()) {
+                    admitted = admissions.admitByAdministrator(new RepositoryAdmissions.Admission(tenant, facts.accountId(),
+                            facts.target().installationId(), facts.target().repositoryId(), subject, clock.instant()));
+                    if (admitted) {
+                        LOG.info("repository_admitted source=repository_administrator installation={} repository={} subject={}",
+                                facts.target().installationId(), facts.target().repositoryId(), subject);
+                    }
+                }
+                repositories.add(new ReconciledRepository(facts, admitted));
+            }
+            if (installation.active()) {
+                for (var revoked : admissions.revokeAbsent(new RepositoryAdmissions.Revocation(tenant,
+                        installation.installationId(), listed, subject, clock.instant()))) {
+                    LOG.info("repository_admission_revoked reason=not_listed_by_installation installation={} repository={} subject={}",
+                            installation.installationId(), revoked, subject);
+                }
+            }
+            result.add(new ReconciledInstallation(installation, repositories));
+        }
+        return result;
     }
 
     @Override

@@ -100,6 +100,23 @@ public class GitHubController {
                 result.repositories().stream().map(GitHubController::repository).toList());
     }
 
+    @GetMapping("/api/v1/github/installations")
+    @Operation(summary = "List the user's pipesor installations and repository admission (ADR-024)",
+            description = "Read with the user's token. Repositories the user administers in a pipesor installation are admitted; "
+                    + "admissions of repositories an installation no longer lists are revoked. Browser-supplied installation data is never used.")
+    public GitHubResources.Installations installations(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, HttpServletRequest request) {
+        var context = RequestContext.self(jwt, request, limits, clock);
+        var result = queries.listInstallations(new DiscoverRepositoriesQuery(context.access()));
+        if (result == null) { throw ApiFailure.unavailable(); }
+        binding(context, result.context(), result.link(), result.observedAt());
+        return new GitHubResources.Installations(discoveryContext(context, result.link(), result.observedAt()),
+                result.installations().stream().map(installation -> new GitHubResources.Installation(installation.installationId(),
+                        new GitHubResources.Account(installation.accountId(), installation.accountLogin()), !installation.active(),
+                        installation.repositories().stream().map(repository -> new GitHubResources.RepositoryAdmission(
+                                repository.repositoryId(), repository.fullName(), repository.admitted(), repository.userIsAdmin())).toList()))
+                        .toList());
+    }
+
     @GetMapping("/api/v1/github/repositories/{repositoryId}/workflows")
     @Operation(summary = "Discover a complete bounded first page of current workflows for self")
     public GitHubResources.Workflows workflows(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, HttpServletRequest request,

@@ -63,6 +63,24 @@ public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ing
             return new Observation<>(request,List.copyOf(result),clock.instant());
         }, true);
     }
+    @Override public Observation<Identity,List<InstallationRepositories>> installations(Identity request) {
+        return execute(request, s -> {
+            var result=new ArrayList<InstallationRepositories>(); var seen=new HashSet<String>(); int total=0;
+            for (var installation:s.installations()) {
+                var repositories=new ArrayList<RepositoryFacts>();
+                if (installation.active()) {
+                    for (var repo:s.pages("/user/installations/"+installation.id()+"/repositories", "repositories")) {
+                        var facts=facts(repo, installation);
+                        if (!seen.add(facts.target().repositoryId()) || ++total>maxItems) { throw failure(UNAVAILABLE); }
+                        repositories.add(facts);
+                    }
+                }
+                result.add(new InstallationRepositories(installation.id(),installation.account(),installation.login(),
+                        installation.active(),repositories));
+            }
+            return new Observation<>(request,List.copyOf(result),clock.instant());
+        }, true);
+    }
     @Override public Observation<RepositoryRequest,RepositoryFacts> repository(RepositoryRequest request) {
         return execute(request.identity(),s -> new Observation<>(request,s.repository(request.repository()),clock.instant()),true);
     }
@@ -164,7 +182,7 @@ public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ing
         } catch(GitHubAccessFailure fixed) { throw fixed; }
         catch(RuntimeException privateFailure) { throw failure(UNAVAILABLE); }
     }
-    private record Installation(String id,String account,boolean active) {}
+    private record Installation(String id,String account,String login,boolean active) {}
     private final class Session {
         final String token; final Instant expiresAt; final long started; int pages; int remainingBytes=maxBytes;
         Session(String token,Instant expiresAt,long started) { this.token=token; this.expiresAt=expiresAt; this.started=started; }
@@ -179,11 +197,13 @@ public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ing
             for(var item:pages("/user/installations","installations")) {
                 var installId=id(item,"id");
                 if(!seen.add(installId) || !appId.equals(id(item,"app_id"))) { throw failure(UNAVAILABLE); }
-                var account=id(object(item,"account"),"id");
+                var owner=object(item,"account"); var account=id(owner,"id");
+                // Display only (installation chooser); identity checks use the numeric account ID.
+                var login=owner.has("login") && owner.get("login").isString() ? owner.get("login").asString() : null;
                 if(!item.has("suspended_at")) { throw failure(UNAVAILABLE); }
                 var suspended=item.get("suspended_at");
                 if(!suspended.isNull() && !suspended.isString()) { throw failure(UNAVAILABLE); }
-                result.add(new Installation(installId,account,suspended.isNull()));
+                result.add(new Installation(installId,account,login,suspended.isNull()));
             }
             return result;
         }

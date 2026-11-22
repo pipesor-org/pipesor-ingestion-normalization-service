@@ -14,6 +14,8 @@ public interface ReadOnlyGitHub {
     Observation<Identity, String> currentUser(Identity request);
     Observation<RepositoryRequest, RepositoryFacts> repository(RepositoryRequest request);
     Observation<Identity, List<RepositoryFacts>> repositories(Identity request);
+    /** The pipesor App installations visible to the user, each with the repositories GitHub currently lists in it. */
+    Observation<Identity, List<InstallationRepositories>> installations(Identity request);
     Observation<RepositoryRequest, List<WorkflowMetadata>> workflows(RepositoryRequest request);
     Observation<WorkflowRequest, WorkflowMetadata> workflow(WorkflowRequest request);
     /** One bounded page of the workflow's failed runs, read with the user's token. */
@@ -30,6 +32,11 @@ public interface ReadOnlyGitHub {
                            java.time.Instant createdAt, java.net.URI htmlUrl) {
             this(runId, attempt, conclusion, headBranch, headSha, createdAt, null, htmlUrl);
         }
+    }
+    /** {@code active} is false for a suspended installation, which lists no repositories. */
+    record InstallationRepositories(String installationId, String accountId, String accountLogin, boolean active,
+                                    List<RepositoryFacts> repositories) {
+        public InstallationRepositories { repositories = List.copyOf(repositories); }
     }
     record RunPage(List<WorkflowRun> runs, boolean more) {
         public RunPage { runs = List.copyOf(runs); }
