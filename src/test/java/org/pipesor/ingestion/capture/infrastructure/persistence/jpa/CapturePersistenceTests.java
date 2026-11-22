@@ -264,6 +264,14 @@ class CapturePersistenceTests {
         var retry = broker.sent.get(1); assertEquals(uncertain.id(), retry.id()); assertArrayEquals(uncertain.body(), retry.body());
         assertEquals(uncertain.applicationProperties(), retry.applicationProperties()); assertEquals("PUBLISHED", ledger.receipt(receipt.id()).phase());
     }
+    @Test void observedFailureDistinguishesFailedFromSuccessfulObservations() {
+        // A failed observation opens an incident; a successful one is only a verification execution.
+        assertTrue(handler.observedFailure(prepared(true)));
+        reset();
+        assertFalse(handler.observedFailure(prepared(false)));
+        assertFalse(handler.observedFailure(claim(accept())), "no observation before preparation");
+        failure(CONFLICT, () -> ledger.observedFailure(UUID.randomUUID()));
+    }
     @Test void stolenOutputClaimRejectsOldAcknowledgementAndExpiredAcknowledgement() {
         var receipt = prepared(false); var first = ledger.claimOutput(receipt.observationId(), UUID.randomUUID(), NOW.plusSeconds(10), NOW).orElseThrow();
         assertTrue(ledger.claimOutput(receipt.observationId(), UUID.randomUUID(), NOW.plusSeconds(20), NOW).isEmpty());

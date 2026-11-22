@@ -118,12 +118,12 @@ public class GitHubController {
     }
 
     @GetMapping("/api/v1/github/repositories/{repositoryId}/workflows/{workflowId}/runs")
-    @Operation(summary = "List one bounded page of the workflow's failed runs for self", description = "Read from the GitHub API with the user's token after current access checks. pageToken is opaque.")
+    @Operation(summary = "List one bounded page of the workflow's failed or successful runs for self", description = "Read from the GitHub API with the user's token after current access checks. conclusion is failure (default, runs to analyse) or success (runs to record as verification). pageToken is opaque.")
     public GitHubResources.Runs runs(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, HttpServletRequest request,
                                      @PathVariable String repositoryId, @PathVariable String workflowId,
                                      @RequestParam(defaultValue = "failure") String conclusion,
                                      @RequestParam(required = false) Integer pageSize, @RequestParam(required = false) String pageToken) {
-        if (!"failure".equals(conclusion)) { throw new ApiFailure(400, "INVALID_REQUEST"); }
+        if (!ListRunsQuery.CONCLUSIONS.contains(conclusion)) { throw new ApiFailure(400, "INVALID_REQUEST"); }
         int size = pageSize == null ? DEFAULT_RUN_PAGE_SIZE : pageSize;
         if (size < 1 || size > 100) { throw new ApiFailure(400, "INVALID_REQUEST"); }
         int page = page(pageToken);
@@ -131,7 +131,7 @@ public class GitHubController {
         var context = RequestContext.self(jwt, request, limits, clock);
         var targets = resolve(context, ids(List.of(repositoryId)));
         var target = targets.get(repositoryId).orElseThrow(() -> new ApiFailure(403, "DENIED"));
-        var result = queries.listFailedRuns(new ListFailedRunsQuery(context.access(), target, workflowId, page, size));
+        var result = queries.listRuns(new ListRunsQuery(context.access(), target, workflowId, conclusion, page, size));
         if (result == null || !target.equals(result.repository().target())) { throw ApiFailure.unavailable(); }
         binding(context, result.context(), result.link(), result.observedAt());
         var next = result.more() && page < maxRunPages ? token(page + 1) : null;

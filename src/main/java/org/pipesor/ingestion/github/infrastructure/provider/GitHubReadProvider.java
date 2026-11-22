@@ -114,14 +114,14 @@ public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ing
         } catch(GitHubAccessFailure fixed) { throw fixed; }
         catch(RuntimeException privateFailure) { throw failure(UNAVAILABLE); }
     }
-    @Override public Observation<RunsRequest,RunPage> failedRuns(RunsRequest request) {
+    @Override public Observation<RunsRequest,RunPage> runs(RunsRequest request) {
         return execute(request.workflow().repository().identity(),s -> {
             positive(request.workflow().workflowId());
-            if(request.page()<1 || request.pageSize()<1 || request.pageSize()>100 || request.page()>maxPages) { throw failure(UNAVAILABLE); }
+            if(!java.util.Set.of("failure","success").contains(request.conclusion()) || request.page()<1 || request.pageSize()<1 || request.pageSize()>100 || request.page()>maxPages) { throw failure(UNAVAILABLE); }
             var facts=s.repository(request.workflow().repository().repository());
             s.verifyRepositoryName(facts);
             var body=s.get("/repos/"+facts.fullName()+"/actions/workflows/"+request.workflow().workflowId()
-                    +"/runs?status=failure&per_page="+request.pageSize()+"&page="+request.page());
+                    +"/runs?status="+request.conclusion()+"&per_page="+request.pageSize()+"&page="+request.page());
             var count=body.get("total_count"); var array=body.get("workflow_runs");
             if(count==null || !count.isIntegralNumber() || !count.canConvertToLong() || count.longValue()<0
                     || array==null || !array.isArray() || array.size()>request.pageSize()) { throw failure(UNAVAILABLE); }
@@ -131,6 +131,8 @@ public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ing
                 var attempt=item.get("run_attempt");
                 if(attempt==null || !attempt.isIntegralNumber() || !attempt.canConvertToInt() || attempt.intValue()<1) { throw failure(UNAVAILABLE); }
                 var conclusion=item.get("conclusion");
+                // GitHub filters by status; a run with another conclusion is a provider inconsistency.
+                if(conclusion==null || !request.conclusion().equals(conclusion.asString())) { throw failure(UNAVAILABLE); }
                 var branch=item.get("head_branch");
                 runs.add(new WorkflowRun(id(item,"id"),attempt.intValue(),conclusion==null || conclusion.isNull()?null:conclusion.asString(),
                         branch==null || branch.isNull()?null:branch.asString(),text(item,"head_sha"),Instant.parse(text(item,"created_at")),

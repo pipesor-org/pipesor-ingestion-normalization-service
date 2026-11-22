@@ -95,12 +95,13 @@ public final class GitHubQueryHandler implements GitHubQueries {
     }
 
     @Override
-    public GitHubViews.Runs listFailedRuns(ListFailedRunsQuery query) {
+    public GitHubViews.Runs listRuns(ListRunsQuery query) {
         var identity = begin(query.context());
         var repository = requireRepository(identity, query.repository());
         var request = new ReadOnlyGitHub.RunsRequest(new ReadOnlyGitHub.WorkflowRequest(
-                new ReadOnlyGitHub.RepositoryRequest(identity, query.repository()), query.workflowId()), query.page(), query.pageSize());
-        var page = read(request, () -> github.failedRuns(request));
+                new ReadOnlyGitHub.RepositoryRequest(identity, query.repository()), query.workflowId()), query.conclusion(),
+                query.page(), query.pageSize());
+        var page = read(request, () -> github.runs(request));
         var ids = new HashSet<String>();
         for (var run : page.runs()) {
             if (run == null || !ids.add(run.runId())) { throw failure(UNAVAILABLE); }

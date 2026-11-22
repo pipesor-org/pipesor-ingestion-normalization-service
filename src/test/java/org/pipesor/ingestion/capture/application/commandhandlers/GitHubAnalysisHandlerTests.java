@@ -68,11 +68,20 @@ class GitHubAnalysisHandlerTests {
     @Test void publishedAnalysesExposePipelineDeterministicIdentifiers() {
         when(scopes.completedScope("pilot", TENANT, "480", "590")).thenReturn(Optional.of(SCOPE));
         access(true, "240");
-        when(capture.find(SCOPE, "7001", 2)).thenReturn(Optional.of(receipt("PUBLISHED")));
+        var failed = receipt("PUBLISHED");
+        when(capture.find(SCOPE, "7001", 2)).thenReturn(Optional.of(failed));
+        when(capture.observedFailure(failed)).thenReturn(true);
         var published = handler.status(DISCOVER, TARGET, Instant.now().minusSeconds(1), () -> {}).orElseThrow();
         var execution = PipelineIds.execution("480", "7001", 2);
         assertEquals(execution, published.executionId());
         assertEquals(PipelineIds.incident(execution), published.incidentId());
+        // A successful run is only an execution (a verification candidate): it opens no incident.
+        var succeeded = receipt("PUBLISHED");
+        when(capture.find(SCOPE, "7001", 2)).thenReturn(Optional.of(succeeded));
+        when(capture.observedFailure(succeeded)).thenReturn(false);
+        var verification = handler.status(DISCOVER, TARGET, Instant.now().minusSeconds(1), () -> {}).orElseThrow();
+        assertEquals(execution, verification.executionId());
+        assertNull(verification.incidentId());
         when(capture.find(SCOPE, "7001", 2)).thenReturn(Optional.of(receipt("PREPARED")));
         assertEquals("PREPARING", handler.status(DISCOVER, TARGET, Instant.now().minusSeconds(1), () -> {}).orElseThrow().phase());
         when(capture.find(SCOPE, "7001", 2)).thenReturn(Optional.of(receipt("BLOCKED")));

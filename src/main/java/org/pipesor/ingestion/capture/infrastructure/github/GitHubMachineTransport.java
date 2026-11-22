@@ -120,7 +120,8 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
                 s.sameVersion(runPath,token,sourceVersion);s.fence(base,token);
             }
             StepLogs steps=new StepLogs(run,List.of());
-            if(archive){
+            // Successful runs need no log content: only failed runs yield evidence, so their archive is never downloaded.
+            if(archive&&("failure".equals(run.conclusion())||"timed_out".equals(run.conclusion()))){
                 var redirect=s.call(origin.resolve(runPath+"/logs"),token,null,302,maxBytes,false);
                 var target=downloadTarget(redirect);
                 var response=s.call(target,null,null,200,archiveLimits.maxCompressedBytes(),true);

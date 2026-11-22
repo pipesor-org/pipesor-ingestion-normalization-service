@@ -20,4 +20,6 @@ public interface CaptureLedger {
     void retry(PublicationOutput output, Instant nextAttemptAt, Instant now);
     void blockOutput(PublicationOutput output, Instant now);
     int purgeConfirmedPayloads(Instant now);
+    /** Whether the stored observation recorded a failure (snapshot and evidence) rather than a successful run. */
+    boolean observedFailure(java.util.UUID observationId);
 }

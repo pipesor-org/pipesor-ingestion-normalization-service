@@ -57,6 +57,17 @@ public final class JpaCaptureLedger implements CaptureLedger {
     private static void future(Instant horizon, Instant now) { if (horizon == null || !technical(horizon).isAfter(now)) { throw new CaptureFailure(INVALID_INPUT); } }
     @Override public CaptureReceipt receipt(UUID id) { return execute(() -> row(id, false).snapshot()); }
 
+    @Override public boolean observedFailure(UUID observationId) {
+        return execute(() -> {
+            // A failed observation requires two outputs (snapshot and protected evidence); a successful one only the snapshot.
+            var rows = entityManager.createNativeQuery(
+                    "SELECT required_output_count FROM ingestion.capture_observations WHERE id = ?1")
+                    .setParameter(1, observationId).getResultList();
+            if (rows.isEmpty()) throw new CaptureFailure(CONFLICT);
+            return ((Number) rows.getFirst()).intValue() == 2;
+        });
+    }
+
     @Override public Optional<CaptureReceipt> findDelivery(CaptureScope scope, String source, String deliveryId) {
         return execute(() -> {
             var rows = entityManager.createNativeQuery("""
