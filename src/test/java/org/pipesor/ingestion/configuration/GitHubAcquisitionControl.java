@@ -81,11 +81,11 @@ public final class GitHubAcquisitionControl {
                 100, 2, 100, 4_000_000, 1_000_000, new GitHubMachineTransport.ArchiveLimits(1048576, 8388608, 100, 1048576),
                 Set.of("results-receiver.actions.githubusercontent.com"), clock);
         classify(scope, runId, control, transport,
-                new org.pipesor.ingestion.capture.application.services.VerifyPreparationProfile(1048576));
+                new org.pipesor.ingestion.capture.application.services.FailedRunEvidenceProfile(8388608, 1048576));
     }
 
     private static void classify(CaptureScope scope, String runId, Control control, GitHubMachineTransport transport,
-            org.pipesor.ingestion.capture.application.services.VerifyPreparationProfile profile) {
+            org.pipesor.ingestion.capture.application.services.FailedRunEvidenceProfile profile) {
         var request = new Request(scope, runId, 1, UUID.randomUUID().toString());
         if (control.jobs().isEmpty()) {
             control.verify(transport.readRun(request));

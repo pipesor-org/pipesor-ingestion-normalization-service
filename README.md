@@ -205,6 +205,11 @@ The standalone Lefthook binary must be on PATH; Bun 1.4.4 is development tooling
 not an application runtime dependency. CI checks PR titles/full squash messages,
 nonempty descriptions, commit ranges and the latest integrated commit.
 
+Capture preparation now uses the general
+[failed-run evidence profile](docs/deployment-contract.md#failed-run-evidence-profile-v1-protected-evidence-22),
+which emits protected evidence 2.2 for any registered workflow. The historical
+notes below describe the superseded closed Verify profile.
+
 The renamed CI workflow, reordered steps, composite log nesting and separate
 publisher are incompatible with the closed legacy Verify preparation profile.
 Its approved parser and fixtures remain unchanged and its opt-in preparation is

@@ -95,8 +95,9 @@ public record WorkflowObservation(CaptureContext captureContext, Pipeline pipeli
         }
         public Evidence {
             if (stage == null) { fail(INVALID_STAGE); }
-            if (sourceLocator != null && (job == null || !job.matches("[1-9][0-9]*") || !sourceLocator.matches(
-                    "v2:job:" + job + ":member:[0-9]{1,9}_verify\\.txt:lines:([1-9][0-9]{0,8})-\\1:sha256:[0-9a-f]{64}"))) { fail(INVALID_EVIDENCE); }
+            if (sourceLocator != null && (job == null || !job.matches("[1-9][0-9]*") || !SourceLocator.valid(sourceLocator, job))) {
+                fail(INVALID_EVIDENCE);
+            }
             text(excerpt, INVALID_EVIDENCE);
             if (job != null && job.isBlank()) { fail(INVALID_EVIDENCE); }
             if (sequence != null && sequence < 0) { fail(INVALID_EVIDENCE); }

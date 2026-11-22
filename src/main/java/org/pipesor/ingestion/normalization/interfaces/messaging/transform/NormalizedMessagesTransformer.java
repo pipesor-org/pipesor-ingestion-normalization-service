@@ -26,7 +26,7 @@ public final class NormalizedMessagesTransformer {
         var capture = observation.captureContext();
         var execution = observation.execution();
         var evidence = observation.evidence();
-        var envelope = new EvidenceEnvelope(evidence.sourceLocator() == null ? "2.0" : "2.1", "protected_workflow_evidence", result.evidenceMessageId(),
+        var envelope = new EvidenceEnvelope(evidence.sourceLocator() == null ? "2.0" : "2.2", "protected_workflow_evidence", result.evidenceMessageId(),
                 observation.occurredAt(), observation.sourceUpdatedAt(), observation.correlationId(), "github_actions",
                 new CaptureContext(capture.tenantId(), capture.githubAccountId(), capture.githubInstallationId(), capture.scopeRevision()),
                 new Pipeline(observation.pipeline().githubRepositoryId(), observation.pipeline().githubWorkflowId()),

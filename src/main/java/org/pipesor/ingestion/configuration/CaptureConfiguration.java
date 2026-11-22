@@ -4,7 +4,7 @@ import jakarta.persistence.EntityManagerFactory;
 import java.time.Clock;
 import org.pipesor.ingestion.capture.application.commandhandlers.*;
 import org.pipesor.ingestion.capture.application.ports.*;
-import org.pipesor.ingestion.capture.application.services.VerifyPreparationProfile;
+import org.pipesor.ingestion.capture.application.services.FailedRunEvidenceProfile;
 import org.pipesor.ingestion.capture.infrastructure.configuration.GitHubFileAuthority;
 import org.pipesor.ingestion.capture.infrastructure.github.GitHubMachineTransport;
 import org.pipesor.ingestion.capture.infrastructure.messaging.NormalizedOutputEncoder;
@@ -53,12 +53,12 @@ public class CaptureConfiguration {
         return new CaptureHandler(ledger, authority, publisher, clock);
     }
 
-    @Bean VerifyPreparationProfile verifyPreparationProfile(CaptureProperties capture) {
-        return new VerifyPreparationProfile(capture.protection().maxInputBytes());
+    @Bean FailedRunEvidenceProfile failedRunEvidenceProfile(CaptureProperties capture) {
+        return new FailedRunEvidenceProfile(capture.archive().maxExpandedBytes(), capture.protection().maxInputBytes());
     }
 
     @Bean PrepareGitHubCapture prepareGitHubCapture(CaptureHandler capture, GitHubMachineTransport github,
-            VerifyPreparationProfile profile, NormalizeObservationHandler normalizer, ProtectedMessageEncoder encoder,
+            FailedRunEvidenceProfile profile, NormalizeObservationHandler normalizer, ProtectedMessageEncoder encoder,
             Clock clock, CaptureProperties properties) {
         return new PrepareGitHubCapture(capture, github, profile, normalizer, encoder, clock,
                 properties.maxMessageBytes(), properties.protection().version());
