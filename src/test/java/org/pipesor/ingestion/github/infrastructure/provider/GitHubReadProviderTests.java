@@ -88,12 +88,14 @@ class GitHubReadProviderTests {
         fail(CONNECTION_REQUIRED,()->provider().read("private-user-token",NOW));
     }
     @Test void failedRunsAreOneBoundedPageOfTheSelectedWorkflow(){
-        var run="{\"id\":7001,\"workflow_id\":71992547409933222,\"run_attempt\":2,\"conclusion\":\"failure\",\"head_branch\":\"main\",\"head_sha\":\"abc\",\"created_at\":\"2026-11-08T10:00:00Z\",\"html_url\":\"https://github.com/owner/repository/actions/runs/7001\"}";
+        var run="{\"id\":7001,\"workflow_id\":71992547409933222,\"run_attempt\":2,\"conclusion\":\"failure\",\"head_branch\":\"main\",\"head_sha\":\"abc\",\"created_at\":\"2026-11-08T10:00:00Z\",\"run_started_at\":\"2026-11-08T12:00:00Z\",\"html_url\":\"https://github.com/owner/repository/actions/runs/7001\"}";
         var path="/repos/owner/repository/actions/workflows/71992547409933222/runs?status=failure&per_page=1&page=1";
         responses.put(path,"{\"total_count\":3,\"workflow_runs\":["+run+"]}");
         var runs=new RunsRequest(new WorkflowRequest(request(),"71992547409933222"),"failure",1,1);
         var page=provider().runs(runs).value();
         assertEquals("7001",page.runs().getFirst().runId());assertEquals(2,page.runs().getFirst().attempt());assertTrue(page.more());
+        // A re-run keeps created_at from the first attempt; run_started_at is this attempt's start.
+        assertEquals(java.time.Instant.parse("2026-11-08T12:00:00Z"),page.runs().getFirst().runStartedAt());
         responses.put(path,"{\"total_count\":3,\"workflow_runs\":["+run.replace("71992547409933222","1")+"]}");
         fail(UNAVAILABLE,()->provider().runs(runs));
         responses.put(path,"{\"total_count\":3,\"workflow_runs\":["+run+","+run+"]}");
@@ -107,6 +109,7 @@ class GitHubReadProviderTests {
         responses.put("/repos/owner/repository/actions/workflows/71992547409933222/runs?status=success&per_page=1&page=1","{\"total_count\":1,\"workflow_runs\":["+run+"]}");
         var page=provider().runs(new RunsRequest(new WorkflowRequest(request(),"71992547409933222"),"success",1,1)).value();
         assertEquals("7002",page.runs().getFirst().runId());assertEquals("success",page.runs().getFirst().conclusion());
+        assertEquals(null,page.runs().getFirst().runStartedAt(),"a run without run_started_at keeps it absent");
     }
     @Test void preservesTrueAdministrationAndNullableBranchWithoutDefaultBranchFilter(){
         responses.put("/user/installations/81/repositories?per_page=2&page=1",page("repositories",REPO.replace("\"admin\":false","\"admin\":true").replace("\"default_branch\":null","\"default_branch\":\"release\"")));

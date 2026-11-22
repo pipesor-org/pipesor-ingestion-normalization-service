@@ -136,12 +136,18 @@ public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ing
                 var branch=item.get("head_branch");
                 runs.add(new WorkflowRun(id(item,"id"),attempt.intValue(),conclusion==null || conclusion.isNull()?null:conclusion.asString(),
                         branch==null || branch.isNull()?null:branch.asString(),text(item,"head_sha"),Instant.parse(text(item,"created_at")),
+                        startedAt(item),
                         URI.create(text(item,"html_url"))));
             }
             s.verifyRepositoryName(facts);
             boolean more=(long)request.page()*request.pageSize()<count.longValue() && !array.isEmpty();
             return new Observation<>(request,new RunPage(List.copyOf(runs),more),clock.instant());
         },true);
+    }
+    /** The attempt's start time; absent or null for runs that never started. */
+    private static Instant startedAt(JsonNode item) {
+        var value = item.get("run_started_at");
+        return value == null || value.isNull() ? null : Instant.parse(value.asString());
     }
     private <T>T execute(Identity identity,Function<Session,T> work,boolean verifyUser) {
         try {

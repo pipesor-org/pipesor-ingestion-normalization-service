@@ -270,6 +270,7 @@ class GitHubHttpTests {
         assertEquals("7001", page.get("items").get(0).get("runId").asString());
         assertEquals(2, page.get("items").get(0).get("attempt").asInt());
         assertEquals("https://github.com/example/service/actions/runs/7001", page.get("items").get(0).get("htmlUrl").asString());
+        assertTrue(page.get("items").get(0).has("runStartedAt"), "runStartedAt is part of the run listing contract");
         var next = page.get("nextPageToken").asString();
         assertEquals(200, request(base, path + "&pageToken=" + next + "&pageSize=5", session, null, Map.of()).statusCode());
         // Successful runs are listable as verification candidates; other conclusions are not.
