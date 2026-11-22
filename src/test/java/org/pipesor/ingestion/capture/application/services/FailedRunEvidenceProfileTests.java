@@ -75,6 +75,22 @@ class FailedRunEvidenceProfileTests {
         assertTrue(result.fragmentLocator().endsWith(":lines:1-2:sha256:" + sha(raw)));
     }
 
+    @Test void keepsTheExceptionSummaryThatFollowsTheAnnotatedLine() throws Exception {
+        var step = new Step(7, "Build and check the candidate image", "completed", "failure", START, START.plusSeconds(20));
+        String log = line(1, "#10 DONE 2.4s") + line(2, "Traceback (most recent call last):")
+                + line(2, "  File \"tools/check_image.py\", line 32, in <module>")
+                + line(2, "    check_image(sys.argv[1], os.environ['GITHUB_SHA'])")
+                + line(2, "##[error]    raise RuntimeError('Packaged service did not reject missing runtime configuration as expected')")
+                + line(2, "RuntimeError: Packaged service did not reject missing runtime configuration as expected")
+                + line(3, "##[error]Process completed with exit code 1.");
+        var job = job("failure", step);
+        var result = profile.classify(new StepLogs(run("failure", job), List.of(new StepLog(job.id(), 7, bytes(log)))));
+        var excerpt = result.observation().evidence().excerpt();
+        assertTrue(excerpt.contains("RuntimeError: Packaged service did not reject"), "the exception summary reaches the model");
+        assertFalse(excerpt.contains("Process completed with exit code"));
+        assertTrue(result.fragmentLocator().contains(":lines:1-6:"));
+    }
+
     @Test void containerFailureFallsBackToTheGenericExitLine() throws Exception {
         var image = new Step(4, "Build Docker image", "completed", "failure", START, START.plusSeconds(5));
         String log = line(1, "#5 [2/4] RUN apt-get update") + line(2, "#5 exit code: 100")

@@ -46,7 +46,11 @@ public final class FailedRunEvidenceProfile {
             Pattern.compile("##\\[error\\].*"),
             Pattern.compile("\\[ERROR\\].*"),
             Pattern.compile("(?i)^(npm ERR!|npm error|yarn error|error TS\\d+|error\\[E\\d+\\]|ERROR:|Error:|E\\s{2,}\\S|FAILED|FAILURE:|BUILD FAILED|fatal:|panic:|Traceback).*"),
-            Pattern.compile("(?i).*\\b(failed to solve|exception in thread|tests? failed|failures: [1-9]|errors: [1-9]|could not resolve|permission denied|timed out)\\b.*"));
+            Pattern.compile("(?i).*\\b(failed to solve|exception in thread|tests? failed|failures: [1-9]|errors: [1-9]|could not resolve|permission denied|timed out)\\b.*"),
+            // Exception summaries such as "RuntimeError: …" or "java.lang.IllegalStateException: …".
+            Pattern.compile("^\\s*(Caused by: )?[A-Za-z_][\\w.$]*(Error|Exception)(: .*)?$"));
+    /** Lines kept after the anchor so trailing summaries are not cut off (the generic exit line ends it). */
+    static final int TRAILING_LINES = 3;
     private final int maxInputBytes;
     private final int maxExcerptBytes;
 
@@ -142,18 +146,24 @@ public final class FailedRunEvidenceProfile {
             if (ERRORS.stream().anyMatch(pattern -> pattern.matcher(value).matches())) anchor = i;
         }
         if (anchor < 0) anchor = generic >= 0 ? generic : text.to();
-        int start = Math.max(text.from(), anchor - (EXCERPT_LINES - 1));
-        String raw = raw(text.lines(), start, anchor);
+        int end = anchor;
+        while (end < text.to() && end - anchor < TRAILING_LINES
+                && !GENERIC_EXIT.matcher(text.lines().get(end + 1).text()).matches()
+                && !text.lines().get(end + 1).text().isBlank()) {
+            end++;
+        }
+        int start = Math.max(text.from(), end - (EXCERPT_LINES - 1));
+        String raw = raw(text.lines(), start, end);
         while (raw.getBytes(StandardCharsets.UTF_8).length > maxExcerptBytes && start < anchor) {
             start++;
-            raw = raw(text.lines(), start, anchor);
+            raw = raw(text.lines(), start, end);
         }
         if (raw.getBytes(StandardCharsets.UTF_8).length > maxExcerptBytes) throw invalid();
-        var selected = text.lines().subList(start, anchor + 1);
+        var selected = text.lines().subList(start, end + 1);
         String plain = String.join("\n", selected.stream().map(Line::text).toList());
         Instant detected = text.lines().get(anchor).time();
         if (step != null && step.completedAt() != null && detected.isAfter(step.completedAt().plusSeconds(1))) throw invalid();
-        return new Excerpt(start + 1, anchor + 1, raw, plain, detected);
+        return new Excerpt(start + 1, end + 1, raw, plain, detected);
     }
 
     private static String raw(List<Line> lines, int from, int to) {
