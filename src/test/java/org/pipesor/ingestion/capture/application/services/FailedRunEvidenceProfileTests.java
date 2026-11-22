@@ -91,6 +91,20 @@ class FailedRunEvidenceProfileTests {
         assertTrue(result.fragmentLocator().contains(":lines:1-6:"));
     }
 
+    @Test void terminalColorsStayInTheDigestButNotInTheExcerpt() throws Exception {
+        var step = new Step(3, "Validate pull request commits", "completed", "failure", START, START.plusSeconds(10));
+        String log = line(1, "\u001B[31m✖\u001B[39m   header must not be longer than 72 characters \u001B[90m[header-max-length]\u001B[39m")
+                + line(2, "error: script \"commitlint\" exited with code 1") + line(3, "##[error]Process completed with exit code 1.");
+        var job = job("failure", step);
+        var result = profile.classify(new StepLogs(run("failure", job), List.of(new StepLog(job.id(), 3, bytes(log)))));
+        var excerpt = result.observation().evidence().excerpt();
+        assertFalse(excerpt.contains("\u001B"));
+        assertTrue(excerpt.contains("✖   header must not be longer than 72 characters [header-max-length]"));
+        String original = line(1, "\u001B[31m✖\u001B[39m   header must not be longer than 72 characters \u001B[90m[header-max-length]\u001B[39m")
+                + line(2, "error: script \"commitlint\" exited with code 1");
+        assertTrue(result.fragmentLocator().endsWith(":lines:1-2:sha256:" + sha(original)));
+    }
+
     @Test void containerFailureFallsBackToTheGenericExitLine() throws Exception {
         var image = new Step(4, "Build Docker image", "completed", "failure", START, START.plusSeconds(5));
         String log = line(1, "#5 [2/4] RUN apt-get update") + line(2, "#5 exit code: 100")

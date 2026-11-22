@@ -89,8 +89,9 @@ public final class FailedRunEvidenceProfile {
             StageName stage = stage(step, excerpt.text());
             failure = new Failure(stage, summary(stage), excerpt.detectedAt());
             locator = SourceLocator.of(job.id(), text.member(), excerpt.first(), excerpt.last(), sha256(excerpt.raw()));
-            // The digest covers the original bytes (BOM included); the excerpt handed to protection does not carry it.
-            String visible = excerpt.raw().startsWith("\uFEFF") ? excerpt.raw().substring(1) : excerpt.raw();
+            // The digest covers the original bytes; the excerpt handed to protection drops the BOM and terminal
+            // escape sequences (GitHub logs often carry ANSI colors), which protection would refuse as control characters.
+            String visible = visible(excerpt.raw());
             evidence = new Evidence(stage, job.id(), visible, null, locator);
         }
         var request = run.request();
@@ -164,6 +165,13 @@ public final class FailedRunEvidenceProfile {
         Instant detected = text.lines().get(anchor).time();
         if (step != null && step.completedAt() != null && detected.isAfter(step.completedAt().plusSeconds(1))) throw invalid();
         return new Excerpt(start + 1, end + 1, raw, plain, detected);
+    }
+
+    private static final Pattern TERMINAL_ESCAPES = Pattern.compile("\u001B\\[[0-?]*[ -/]*[@-~]|\u001B\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\)|\u001B[@-Z\\\\-_]");
+
+    static String visible(String raw) {
+        String text = raw.startsWith("\uFEFF") ? raw.substring(1) : raw;
+        return TERMINAL_ESCAPES.matcher(text).replaceAll("");
     }
 
     private static String raw(List<Line> lines, int from, int to) {
