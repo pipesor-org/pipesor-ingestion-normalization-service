@@ -16,7 +16,7 @@ import org.pipesor.ingestion.github.application.services.*;
 import org.pipesor.ingestion.github.domain.model.valueobjects.*;
 import org.pipesor.ingestion.github.interfaces.rest.resources.GitHubResources;
 import org.pipesor.ingestion.shared.interfaces.rest.*;
-import org.springframework.beans.factory.ObjectProvider;
+import org.pipesor.ingestion.shared.security.SubjectTokenFilter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -25,55 +25,60 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-@SecurityRequirement(name = "entraDelegated")
+@SecurityRequirement(name = "platformBearer")
 @ApiResponses({
         @ApiResponse(responseCode = "400", description = "Invalid or unsupported request", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiExceptionHandler.Problem.class))),
-        @ApiResponse(responseCode = "401", description = "Missing or invalid delegated token", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiExceptionHandler.Problem.class))),
+        @ApiResponse(responseCode = "401", description = "Missing or invalid platform token", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiExceptionHandler.Problem.class))),
         @ApiResponse(responseCode = "403", description = "Caller or disclosure denied", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiExceptionHandler.Problem.class))),
         @ApiResponse(responseCode = "409", description = "Connection required or revision conflict", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiExceptionHandler.Problem.class))),
         @ApiResponse(responseCode = "503", description = "Dependency, capacity or deadline unavailable", content = @Content(mediaType = "application/problem+json", schema = @Schema(implementation = ApiExceptionHandler.Problem.class)))
 })
 public class GitHubController {
-    private final ObjectProvider<GitHubQueries> queries;
-    private final ObjectProvider<GitHubRepositorySelection> selections;
-    private final ObjectProvider<GitHubConnectionQueries> connections;
-    private final ObjectProvider<GitHubConnections> commands;
+    private static final int DEFAULT_RUN_PAGE_SIZE = 24;
+    private final GitHubQueries queries;
+    private final GitHubRepositorySelection selections;
+    private final GitHubConnectionQueries connections;
+    private final GitHubConnections commands;
     private final ApiProperties.Limits limits;
+    private final int maxRunPages;
     private final Clock clock;
 
-    public GitHubController(ObjectProvider<GitHubQueries> queries, ObjectProvider<GitHubRepositorySelection> selections,
-                             ObjectProvider<GitHubConnectionQueries> connections, ObjectProvider<GitHubConnections> commands,
-                             ApiProperties properties, Clock clock) {
+    public GitHubController(GitHubQueries queries, GitHubRepositorySelection selections,
+                             GitHubConnectionQueries connections, GitHubConnections commands,
+                             ApiProperties properties,
+                             @org.springframework.beans.factory.annotation.Value("${pipesor.github.limits.max-run-pages:10}") int maxRunPages, Clock clock) {
         this.queries = queries; this.selections = selections; this.connections = connections; this.commands = commands;
-        this.limits = properties.limits(); this.clock = clock;
+        this.limits = properties.limits(); this.maxRunPages = maxRunPages; this.clock = clock;
     }
 
     @PostMapping("/internal/v1/github/access-verifications")
     @Parameter(name = "X-Correlation-Id", in = io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required = true, example = "corr-http")
-    @Operation(summary = "Verify current GitHub facts for the exact repository selection", description = "Pipeline OBO caller only. X-Correlation-Id must match correlationId. Deadline is bounded by the server request budget and actor token expiry. Recipient is a same-tenant object ID for GRANT operations only.")
+    @Parameter(name = SubjectTokenFilter.HEADER, in = io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required = true, description = "The user's unmodified session token (platform identity contract v1, section 4)")
+    @Operation(summary = "Verify current GitHub facts for the exact repository selection", description = "Pipeline workload token with Pipeline.GitHubFacts.Read plus the subject's session token. X-Correlation-Id must match correlationId. Deadline is bounded by the server request budget and both token expiries. Recipient is a same-tenant object ID for GRANT operations only.")
     public GitHubResources.AccessVerification verify(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, HttpServletRequest request,
                                                        @RequestBody GitHubResources.AccessRequest resource) {
-        var context = RequestContext.internal(jwt, request, resource.requestId(), resource.correlationId(), resource.deadline(),
+        var context = RequestContext.internal(SubjectTokenFilter.subject(request), jwt, request, resource.requestId(), resource.correlationId(), resource.deadline(),
                 resource.operation(), resource.recipientObjectId(), limits, clock);
         var ids = ids(resource.repositoryIds());
         var targets = resolve(context, ids);
-        var result = required(queries).verifyAccess(new VerifyAccessQuery(context.access(), resolved(targets)));
+        var result = queries.verifyAccess(new VerifyAccessQuery(context.access(), resolved(targets)));
         return access(context, ids, targets, result);
     }
 
     @PostMapping("/internal/v1/github/workflow-verifications")
     @Parameter(name = "X-Correlation-Id", in = io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required = true, example = "corr-http")
-    @Operation(summary = "Verify selected REGISTER workflow metadata", description = "Pipeline OBO self only; no registration, capability or grant decision.")
+    @Parameter(name = SubjectTokenFilter.HEADER, in = io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required = true, description = "The user's unmodified session token (platform identity contract v1, section 4)")
+    @Operation(summary = "Verify selected REGISTER workflow metadata", description = "Pipeline workload token plus the subject's session token; no registration, capability or grant decision.")
     public GitHubResources.WorkflowVerification workflow(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, HttpServletRequest request,
                                                            @RequestBody GitHubResources.WorkflowRequest resource) {
         if (resource.operation() != AccessOperation.REGISTER) { throw new ApiFailure(400, "INVALID_REQUEST"); }
-        var context = RequestContext.internal(jwt, request, resource.requestId(), resource.correlationId(), resource.deadline(),
+        var context = RequestContext.internal(SubjectTokenFilter.subject(request), jwt, request, resource.requestId(), resource.correlationId(), resource.deadline(),
                 AccessOperation.REGISTER, null, limits, clock);
         var ids = ids(Collections.singletonList(resource.repositoryId()));
         id(resource.workflowId());
         var targets = resolve(context, ids);
         var target = targets.get(resource.repositoryId()).orElseThrow(() -> new ApiFailure(403, "DENIED"));
-        var result = required(queries).selectWorkflow(new SelectWorkflowQuery(context.access(), target, resource.workflowId()));
+        var result = queries.selectWorkflow(new SelectWorkflowQuery(context.access(), target, resource.workflowId()));
         if (result == null || result.repository() == null || result.workflow() == null
                 || !target.equals(result.repository().target()) || !target.equals(result.workflow().repository())
                 || !resource.workflowId().equals(result.workflow().workflowId())) { throw ApiFailure.unavailable(); }
@@ -88,7 +93,7 @@ public class GitHubController {
                                                        @RequestParam int limit, @RequestParam(required = false) String cursor) {
         page(limit, cursor);
         var context = RequestContext.self(jwt, request, limits, clock);
-        var result = required(queries).discoverRepositories(new DiscoverRepositoriesQuery(context.access()));
+        var result = queries.discoverRepositories(new DiscoverRepositoriesQuery(context.access()));
         if (result == null || result.repositories().size() > limit) { throw ApiFailure.unavailable(); }
         binding(context, result.context(), result.link(), result.observedAt());
         return new GitHubResources.Repositories(discoveryContext(context, result.link(), result.observedAt()),
@@ -104,7 +109,7 @@ public class GitHubController {
         var context = RequestContext.self(jwt, request, limits, clock);
         var targets = resolve(context, ids(List.of(repositoryId)));
         var target = targets.get(repositoryId).orElseThrow(() -> new ApiFailure(403, "DENIED"));
-        var result = required(queries).discoverWorkflows(new DiscoverWorkflowsQuery(new DiscoverRepositoriesQuery(context.access()), target));
+        var result = queries.discoverWorkflows(new DiscoverWorkflowsQuery(new DiscoverRepositoriesQuery(context.access()), target));
         if (result == null || !target.equals(result.repository().target())
                 || result.workflows().size() > limit) { throw ApiFailure.unavailable(); }
         binding(context, result.context(), result.link(), result.observedAt());
@@ -112,11 +117,33 @@ public class GitHubController {
                 .map(workflow -> new GitHubResources.Workflow(workflow.workflowId(), workflow.name(), workflow.file())).toList());
     }
 
+    @GetMapping("/api/v1/github/repositories/{repositoryId}/workflows/{workflowId}/runs")
+    @Operation(summary = "List one bounded page of the workflow's failed runs for self", description = "Read from the GitHub API with the user's token after current access checks. pageToken is opaque.")
+    public GitHubResources.Runs runs(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, HttpServletRequest request,
+                                     @PathVariable String repositoryId, @PathVariable String workflowId,
+                                     @RequestParam(defaultValue = "failure") String conclusion,
+                                     @RequestParam(required = false) Integer pageSize, @RequestParam(required = false) String pageToken) {
+        if (!"failure".equals(conclusion)) { throw new ApiFailure(400, "INVALID_REQUEST"); }
+        int size = pageSize == null ? DEFAULT_RUN_PAGE_SIZE : pageSize;
+        if (size < 1 || size > 100) { throw new ApiFailure(400, "INVALID_REQUEST"); }
+        int page = page(pageToken);
+        id(workflowId);
+        var context = RequestContext.self(jwt, request, limits, clock);
+        var targets = resolve(context, ids(List.of(repositoryId)));
+        var target = targets.get(repositoryId).orElseThrow(() -> new ApiFailure(403, "DENIED"));
+        var result = queries.listFailedRuns(new ListFailedRunsQuery(context.access(), target, workflowId, page, size));
+        if (result == null || !target.equals(result.repository().target())) { throw ApiFailure.unavailable(); }
+        binding(context, result.context(), result.link(), result.observedAt());
+        var next = result.more() && page < maxRunPages ? token(page + 1) : null;
+        return new GitHubResources.Runs(result.runs().stream().map(run -> new GitHubResources.Run(run.runId(), run.attempt(),
+                run.conclusion(), run.headBranch(), run.headSha(), run.createdAt(), run.htmlUrl().toString())).toList(), next);
+    }
+
     @GetMapping("/api/v1/github/connection")
     @Operation(summary = "Read minimized self connection metadata", description = "Local metadata is not current GitHub authorization or proof of upstream cleanup.")
     public ResponseEntity<GitHubResources.Connection> connection(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, HttpServletRequest request) {
         var context = RequestContext.self(jwt, request, limits, clock);
-        var result = required(connections).status(new ConnectionStatusQuery(context.identity()));
+        var result = connections.status(new ConnectionStatusQuery(context.identity()));
         context.requireLive(clock);
         if (result == null) { throw ApiFailure.unavailable(); }
         var response = ResponseEntity.ok();
@@ -132,9 +159,9 @@ public class GitHubController {
         if (!expected.matches("\"[0-9]+\"")) { throw new ApiFailure(400, "INVALID_REQUEST"); }
         long revision = Long.parseLong(expected.substring(1, expected.length() - 1));
         var context = RequestContext.self(jwt, request, limits, clock);
-        var status = required(connections).status(new ConnectionStatusQuery(context.identity())).orElseThrow(() -> new ApiFailure(409, "CONNECTION_CONFLICT"));
+        var status = connections.status(new ConnectionStatusQuery(context.identity())).orElseThrow(() -> new ApiFailure(409, "CONNECTION_CONFLICT"));
         context.requireLive(clock);
-        required(commands).disconnect(new ConnectionCommands.Disconnect(status.connectionId(), revision));
+        commands.disconnect(new ConnectionCommands.Disconnect(status.connectionId(), revision));
         return new GitHubResources.Connection(false, Math.addExact(revision, 1), "NOT_CONFIRMED");
     }
 
@@ -142,7 +169,7 @@ public class GitHubController {
         context.requireLive(clock);
         var query = new GitHubRepositorySelection.Request(context.access(), ids);
         var start = clock.instant();
-        var observed = required(selections).resolve(query);
+        var observed = selections.resolve(query);
         var end = clock.instant();
         context.requireLive(clock);
         if (observed == null || !query.equals(observed.request()) || observed.observedAt() == null
@@ -196,16 +223,24 @@ public class GitHubController {
         return Collections.unmodifiableSet(ids);
     }
     private void id(String value) { if (value == null || value.isEmpty() || value.length() > limits.maxContextLength() || !value.matches("[0-9]+")) { throw new ApiFailure(400, "INVALID_REQUEST"); } }
+    private int page(String token) {
+        if (token == null) { return 1; }
+        try {
+            var decoded = new String(java.util.Base64.getUrlDecoder().decode(token), java.nio.charset.StandardCharsets.US_ASCII);
+            if (!decoded.matches("p[1-9][0-9]{0,3}")) { throw new IllegalArgumentException(); }
+            int page = Integer.parseInt(decoded.substring(1));
+            if (page > maxRunPages) { throw new IllegalArgumentException(); }
+            return page;
+        } catch (IllegalArgumentException invalid) { throw new ApiFailure(400, "INVALID_REQUEST"); }
+    }
+    private static String token(int page) {
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(("p" + page).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+    }
     private void page(int limit, String cursor) { if (limit < 1 || limit > limits.maxPageSize() || cursor != null) { throw new ApiFailure(400, "INVALID_REQUEST"); } }
     private static Set<RepositoryTarget> resolved(Map<String, Optional<RepositoryTarget>> selections) {
         var resolved = new HashSet<RepositoryTarget>();
         selections.values().forEach(target -> target.ifPresent(resolved::add));
         return Set.copyOf(resolved);
-    }
-    private static <T> T required(ObjectProvider<T> provider) {
-        var value = provider.getIfAvailable();
-        if (value == null) { throw ApiFailure.unavailable(); }
-        return value;
     }
     private static GitHubResources.Repository repository(GitHubViews.Repository repository) {
         return new GitHubResources.Repository(repository.target().repositoryId(), repository.target().installationId(), repository.fullName(), repository.defaultBranch());

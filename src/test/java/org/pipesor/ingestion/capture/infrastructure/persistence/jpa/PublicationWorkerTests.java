@@ -17,7 +17,7 @@ import org.pipesor.ingestion.capture.domain.exceptions.CaptureFailure;
 import org.pipesor.ingestion.capture.domain.model.aggregates.CaptureReceipt;
 import org.pipesor.ingestion.capture.domain.model.valueobjects.CaptureScope;
 import org.pipesor.ingestion.capture.domain.services.ObservationFingerprint;
-import org.pipesor.ingestion.configuration.CapturePersistenceConfiguration;
+import org.pipesor.ingestion.configuration.TestLedgerConfiguration;
 import org.pipesor.ingestion.github.infrastructure.persistence.jpa.ConnectionJpaEntities;
 import org.pipesor.ingestion.normalization.application.commandhandlers.NormalizeObservationHandler;
 import org.pipesor.ingestion.normalization.application.commands.NormalizeObservationCommand;
@@ -52,7 +52,7 @@ class PublicationWorkerTests {
     @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     @EnableAutoConfiguration
     @EntityScan(basePackageClasses = { CaptureJpaEntities.class, ConnectionJpaEntities.class })
-    @Import(CapturePersistenceConfiguration.class)
+    @Import(TestLedgerConfiguration.class)
     static class TestConfiguration {
         @Bean Clock clock() { return new MutableClock(); }
         @Bean ScopeDouble scope() { return new ScopeDouble(); }
@@ -90,8 +90,8 @@ class PublicationWorkerTests {
         Flyway.configure().dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
                 .defaultSchema("ingestion").schemas("ingestion").load().migrate();
         context = new SpringApplicationBuilder(TestConfiguration.class).web(WebApplicationType.NONE)
-                .properties("spring.datasource.url=" + postgres.getJdbcUrl(), "spring.datasource.username=" + postgres.getUsername(),
-                        "spring.datasource.password=" + postgres.getPassword(), "spring.jpa.hibernate.ddl-auto=validate", "spring.flyway.enabled=false")
+                .initializers(c -> org.springframework.boot.test.util.TestPropertyValues.of("spring.datasource.url=" + postgres.getJdbcUrl(), "spring.datasource.username=" + postgres.getUsername(),
+                        "spring.datasource.password=" + postgres.getPassword(), "spring.jpa.hibernate.ddl-auto=validate", "spring.flyway.enabled=false").applyTo(c))
                 .run("--ingestion.capture.enabled=true");
         ledger = context.getBean(CaptureLedger.class); handler = context.getBean(CaptureHandler.class);
         clock = (MutableClock) context.getBean(Clock.class); authorization = context.getBean(ScopeDouble.class); broker = context.getBean(BrokerDouble.class);

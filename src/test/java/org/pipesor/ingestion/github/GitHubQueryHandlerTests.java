@@ -153,6 +153,21 @@ class GitHubQueryHandlerTests {
     }
 
     @Test
+    void failedRunsAreListedOnlyForAnAdmittedReadableRepositoryAndRejectDuplicates() {
+        var f = new Fixture();
+        var page = f.handler.listFailedRuns(new ListFailedRunsQuery(DISCOVER, FIRST, "82", 1, 24));
+        assertEquals(List.of("7001"), page.runs().stream().map(ReadOnlyGitHub.WorkflowRun::runId).toList());
+        assertTrue(page.more());
+        assertEquals(DISCOVER, page.context());
+        f.deniedAdmission = SECOND;
+        failure(DENIED, () -> f.handler.listFailedRuns(new ListFailedRunsQuery(DISCOVER, SECOND, "93", 1, 24)));
+        f.deniedAdmission = null;
+        f.duplicateRuns = true;
+        failure(UNAVAILABLE, () -> f.handler.listFailedRuns(new ListFailedRunsQuery(DISCOVER, FIRST, "82", 1, 24)));
+        assertThrows(IllegalArgumentException.class, () -> new ListFailedRunsQuery(DISCOVER, FIRST, "82", 1, 101));
+    }
+
+    @Test
     void workflowDiscoveryPreservesContextAndIncludesWorkflowsRegardlessOfDefaultBranch() {
         var f = new Fixture();
         var first = f.handler.discoverWorkflows(new DiscoverWorkflowsQuery(new DiscoverRepositoriesQuery(DISCOVER), FIRST));
@@ -371,6 +386,7 @@ class GitHubQueryHandlerTests {
         RuntimeException failure;
         boolean failSecondAdmission;
         boolean nullObservation;
+        boolean duplicateRuns;
         int linkReads;
         int providerCalls;
         int workflowReads;
@@ -425,6 +441,13 @@ class GitHubQueryHandlerTests {
         public Observation<WorkflowRequest, WorkflowMetadata> workflow(WorkflowRequest request) {
             workflowReads++;
             return observed("workflow", request, metadata(request.repository().repository()));
+        }
+
+        @Override
+        public Observation<RunsRequest, RunPage> failedRuns(RunsRequest request) {
+            workflowReads++;
+            var run = new WorkflowRun("7001", 2, "failure", "main", "a".repeat(40), NOW, java.net.URI.create("https://github.com/x/y/actions/runs/7001"));
+            return observed("runs", request, new RunPage(duplicateRuns ? List.of(run, run) : List.of(run), true));
         }
 
         WorkflowMetadata metadata(RepositoryTarget target) {

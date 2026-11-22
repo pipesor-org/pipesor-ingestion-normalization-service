@@ -42,5 +42,9 @@ public final class GitHubResources {
                                    Instant observedAt, Instant validUntil) {}
     public record Repositories(DiscoveryContext context, List<Repository> repositories) {}
     public record Workflows(DiscoveryContext context, Repository repository, List<Workflow> workflows) {}
+    public record Run(String runId, int attempt, String conclusion, String headBranch, String headSha, Instant createdAt, String htmlUrl) {}
+    public record Runs(List<Run> items, String nextPageToken) {}
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Analysis(UUID analysisId, String phase, String blockedReason, UUID executionId, UUID incidentId) {}
     public record Connection(boolean locallyLinked, Long revision, String cleanupStatus) {}
 }

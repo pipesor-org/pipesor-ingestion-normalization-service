@@ -17,7 +17,7 @@ import tools.jackson.databind.*;
 import tools.jackson.databind.json.JsonMapper;
 
 /** Operator-owned atomic file snapshots; no last-good authorization cache, admin API or restore proof. */
-public final class GitHubFileAuthority implements CurrentMachineScope,InstallationAdmission,GitHubRepositorySelection {
+public final class GitHubFileAuthority implements org.pipesor.ingestion.capture.application.ports.MachineScopes,CurrentMachineScope,InstallationAdmission,GitHubRepositorySelection,org.pipesor.ingestion.auth.application.ports.HumanAdmissions {
     private static final JsonMapper JSON=JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private static final Set<String> ROOT=Set.of("formatVersion","revision","humanAdmissions","machineScopes");
     private static final Set<String> HUMAN=Set.of("tenantId","appId","accountId","installationId","repositoryIds");
@@ -62,7 +62,24 @@ public final class GitHubFileAuthority implements CurrentMachineScope,Installati
             return Decision.UNAVAILABLE;
         }
     }
-    public Instant completedReplayUntil(CaptureScope scope) {
+    /** The admitted machine scope of an exact repository/workflow route that allows on-demand completed captures. */
+    @Override public Optional<CaptureScope> completedScope(String captureDomain,UUID tenant,String repositoryId,String workflowId) {
+        try {
+            CaptureScope.external(repositoryId);CaptureScope.external(workflowId);
+            return load().machines().stream().filter(m->{var s=m.scope();return s.captureDomain().equals(captureDomain)&&s.tenantId().equals(tenant)
+                    &&s.repositoryId().equals(repositoryId)&&s.workflowId().equals(workflowId)&&m.actions().contains("completed");})
+                    .map(Machine::scope).findFirst();
+        } catch(CaptureFailure invalid){if(invalid.reason()==CaptureFailure.Reason.INVALID_INPUT)return Optional.empty();throw captureUnavailable();}
+        catch(RuntimeException unavailable){throw captureUnavailable();}
+    }
+    @Override public boolean admitted(UUID tenant,String accountId,RepositoryTarget repository) {
+        try {
+            Objects.requireNonNull(tenant);Objects.requireNonNull(repository);
+            return load().human().stream().anyMatch(a->a.tenant().equals(tenant)&&a.account().equals(accountId)
+                    &&a.installation().equals(repository.installationId())&&a.repositories().contains(repository.repositoryId()));
+        }catch(RuntimeException unavailable){throw accessUnavailable();}
+    }
+    @Override public Instant completedReplayUntil(CaptureScope scope) {
         try {
             return load().machines().stream()
                     .filter(machine -> scope.equals(machine.scope()) && machine.actions().contains("completed"))

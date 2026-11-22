@@ -19,7 +19,7 @@ import org.pipesor.ingestion.capture.application.ports.*;
 import org.pipesor.ingestion.capture.domain.exceptions.CaptureFailure;
 import org.pipesor.ingestion.capture.domain.model.valueobjects.CaptureScope;
 import org.pipesor.ingestion.capture.infrastructure.persistence.jpa.CaptureJpaEntities;
-import org.pipesor.ingestion.configuration.CapturePersistenceConfiguration;
+import org.pipesor.ingestion.configuration.TestLedgerConfiguration;
 import org.pipesor.ingestion.github.infrastructure.persistence.jpa.ConnectionJpaEntities;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -47,7 +47,7 @@ class GitHubWorkflowWebhookTests {
     private static CaptureHandler handler;
     @Configuration(proxyBeanMethods=false) @EnableAutoConfiguration
     @EntityScan(basePackageClasses={CaptureJpaEntities.class,ConnectionJpaEntities.class})
-    @Import(CapturePersistenceConfiguration.class)
+    @Import(TestLedgerConfiguration.class)
     static class TestConfiguration {
         @Bean Clock clock(){return Clock.fixed(NOW,ZoneOffset.UTC);}
         @Bean CurrentMachineScope scope(){return expected->{outside();return decision;};}

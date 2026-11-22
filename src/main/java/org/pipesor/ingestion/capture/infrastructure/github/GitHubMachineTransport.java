@@ -41,19 +41,13 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
         public AppJwt { CaptureScope.external(appId);org.pipesor.ingestion.github.application.ports.GitHubUserTokens.token(token);Objects.requireNonNull(expiresAt); }
         @Override public String toString(){return "AppJwt[private]";}
     }
-    public GitHubMachineTransport(CurrentMachineScope authority,Supplier<AppJwt> jwt,String appId,String version,Duration budget,
-            int pageSize,int maxPages,int maxJobs,int maxBytes,int maxLogBytes,Set<String> downloadHosts,Clock clock) {
-        this(HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).connectTimeout(budget).build(),URI.create("https://api.github.com"),authority,jwt,appId,version,budget,pageSize,maxPages,maxJobs,maxBytes,maxLogBytes,null,downloadHosts,clock);
-    }
-    public GitHubMachineTransport(CurrentMachineScope authority,Supplier<AppJwt> jwt,String appId,String version,Duration budget,
-            int pageSize,int maxPages,int maxJobs,int maxBytes,int maxLogBytes,ArchiveLimits archiveLimits,Set<String> downloadHosts,Clock clock) {
-        this(HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).connectTimeout(budget).build(),URI.create("https://api.github.com"),authority,jwt,appId,version,budget,pageSize,maxPages,maxJobs,maxBytes,maxLogBytes,archiveLimits,downloadHosts,clock);
-    }
-    GitHubMachineTransport(HttpClient client,URI origin,CurrentMachineScope authority,Supplier<AppJwt> jwt,String appId,String version,Duration budget,
+    /** The API origin is validated by the caller's transport policy (configurable GitHub API base URL). */
+    public GitHubMachineTransport(HttpClient client,URI origin,CurrentMachineScope authority,Supplier<AppJwt> jwt,String appId,String version,Duration budget,
             int pageSize,int maxPages,int maxJobs,int maxBytes,int maxLogBytes,Set<String> downloadHosts,Clock clock) {
         this(client,origin,authority,jwt,appId,version,budget,pageSize,maxPages,maxJobs,maxBytes,maxLogBytes,null,downloadHosts,clock);
     }
-    GitHubMachineTransport(HttpClient client,URI origin,CurrentMachineScope authority,Supplier<AppJwt> jwt,String appId,String version,Duration budget,
+    /** The API origin is validated by the caller's transport policy (configurable GitHub API base URL). */
+    public GitHubMachineTransport(HttpClient client,URI origin,CurrentMachineScope authority,Supplier<AppJwt> jwt,String appId,String version,Duration budget,
             int pageSize,int maxPages,int maxJobs,int maxBytes,int maxLogBytes,ArchiveLimits archiveLimits,Set<String> downloadHosts,Clock clock) {
         this.client=Objects.requireNonNull(client);this.origin=Objects.requireNonNull(origin);this.authority=Objects.requireNonNull(authority);this.jwt=Objects.requireNonNull(jwt);
         this.appId=CaptureScope.external(appId);this.version=Objects.requireNonNull(version);this.budget=Objects.requireNonNull(budget);this.clock=Objects.requireNonNull(clock);

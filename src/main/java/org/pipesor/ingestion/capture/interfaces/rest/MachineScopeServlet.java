@@ -11,7 +11,6 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import org.pipesor.ingestion.capture.infrastructure.configuration.GitHubFileAuthority;
 import org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook.HookContext;
-import org.pipesor.ingestion.configuration.MachineScopeProperties;
 import org.pipesor.ingestion.normalization.domain.model.valueobjects.WorkflowObservation;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -22,19 +21,30 @@ import tools.jackson.databind.json.JsonMapper;
 
 /** Bounded read-only check. Timed-out work keeps its permit until it actually stops. */
 public final class MachineScopeServlet extends HttpServlet {
+    /** The single trusted capture route this check answers for, and its request bounds. */
+    public record Settings(UUID captureTenant, String appId, String captureDomain, int maxRequestBytes, int maxInFlight,
+                           Duration requestTimeout) {
+        public Settings {
+            Objects.requireNonNull(captureTenant); Objects.requireNonNull(appId); Objects.requireNonNull(captureDomain);
+            if (maxRequestBytes < 1 || maxInFlight < 1 || requestTimeout == null || requestTimeout.toMillis() < 1) {
+                throw new IllegalArgumentException("Explicit machine scope limits required");
+            }
+        }
+    }
+
     private static final JsonMapper JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .disable(StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private static final Set<String> FIELDS = Set.of("requestId", "correlationId", "deadlineAt", "tenantId",
             "githubAccountId", "githubInstallationId", "githubRepositoryId", "githubWorkflowId", "scopeRevision");
-    private final MachineScopeProperties properties;
+    private final Settings properties;
     private final GitHubFileAuthority authority;
     private final Clock clock;
     private final Semaphore permits;
     private ScheduledThreadPoolExecutor deadlines;
 
-    public MachineScopeServlet(MachineScopeProperties properties, GitHubFileAuthority authority, Clock clock) {
+    public MachineScopeServlet(Settings properties, GitHubFileAuthority authority, Clock clock) {
         this.properties = Objects.requireNonNull(properties);
         this.authority = Objects.requireNonNull(authority);
         this.clock = Objects.requireNonNull(clock);

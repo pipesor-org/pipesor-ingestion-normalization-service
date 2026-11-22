@@ -94,6 +94,21 @@ public final class GitHubQueryHandler implements GitHubQueries {
                 new GitHubViews.RepositoryAccess(true, true, repository.administrator(), repository.accountId()))), view(repository), workflow);
     }
 
+    @Override
+    public GitHubViews.Runs listFailedRuns(ListFailedRunsQuery query) {
+        var identity = begin(query.context());
+        var repository = requireRepository(identity, query.repository());
+        var request = new ReadOnlyGitHub.RunsRequest(new ReadOnlyGitHub.WorkflowRequest(
+                new ReadOnlyGitHub.RepositoryRequest(identity, query.repository()), query.workflowId()), query.page(), query.pageSize());
+        var page = read(request, () -> github.failedRuns(request));
+        var ids = new HashSet<String>();
+        for (var run : page.runs()) {
+            if (run == null || !ids.add(run.runId())) { throw failure(UNAVAILABLE); }
+        }
+        recheck(identity);
+        return new GitHubViews.Runs(identity.context(), identity.link(), clock.instant(), view(repository), page.runs(), page.more());
+    }
+
     private ReadOnlyGitHub.Identity begin(AccessContext context) {
         var identity = identity(context);
         var actualUser = read(identity, () -> github.currentUser(identity));
