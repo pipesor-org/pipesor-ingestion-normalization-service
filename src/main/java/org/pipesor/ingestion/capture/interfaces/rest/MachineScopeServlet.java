@@ -9,7 +9,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
-import org.pipesor.ingestion.capture.infrastructure.configuration.GitHubFileAuthority;
+import org.pipesor.ingestion.capture.infrastructure.configuration.CaptureAuthority;
 import org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook.HookContext;
 import org.pipesor.ingestion.normalization.domain.model.valueobjects.WorkflowObservation;
 import org.springframework.http.HttpStatus;
@@ -39,12 +39,12 @@ public final class MachineScopeServlet extends HttpServlet {
     private static final Set<String> FIELDS = Set.of("requestId", "correlationId", "deadlineAt", "tenantId",
             "githubAccountId", "githubInstallationId", "githubRepositoryId", "githubWorkflowId", "scopeRevision");
     private final Settings properties;
-    private final GitHubFileAuthority authority;
+    private final CaptureAuthority authority;
     private final Clock clock;
     private final Semaphore permits;
     private ScheduledThreadPoolExecutor deadlines;
 
-    public MachineScopeServlet(Settings properties, GitHubFileAuthority authority, Clock clock) {
+    public MachineScopeServlet(Settings properties, CaptureAuthority authority, Clock clock) {
         this.properties = Objects.requireNonNull(properties);
         this.authority = Objects.requireNonNull(authority);
         this.clock = Objects.requireNonNull(clock);

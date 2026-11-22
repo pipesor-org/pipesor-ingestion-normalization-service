@@ -79,7 +79,7 @@ class WebApplicationCompositionTests {
             assertInstanceOf(ConnectedGitHubLink.class, context.getBean(CurrentGitHubLink.class));
             assertNotNull(context.getBean(GitHubLogin.class));
             assertNotNull(context.getBean(PublicationRunner.class));
-            assertEquals(Integer.valueOf(3), new org.springframework.jdbc.core.JdbcTemplate(context.getBean(javax.sql.DataSource.class))
+            assertEquals(Integer.valueOf(4), new org.springframework.jdbc.core.JdbcTemplate(context.getBean(javax.sql.DataSource.class))
                     .queryForObject("select count(*) from ingestion.flyway_schema_history where success and version is not null", Integer.class));
             var base = URI.create("http://127.0.0.1:" + ((WebServerApplicationContext) context).getWebServer().getPort());
             try (var client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build()) {
@@ -115,6 +115,40 @@ class WebApplicationCompositionTests {
                 assertEquals(403, machine.statusCode());
             }
         }
+    }
+
+    @Test
+    void importedAdmissionsLetPipelineDriveTheWorkflowScope(@TempDir Path directory) throws Exception {
+        var authorityFile = directory.resolve("authority.json");
+        var importArgs = new ArrayList<>(settings(directory));
+        importArgs.add("--spring.main.web-application-type=none");
+        importArgs.add("--pipesor.admin.import-authority=" + authorityFile);
+        var importer = new SpringApplicationBuilder(IngestionServiceApplication.class).run(importArgs.toArray(String[]::new));
+        assertFalse(importer.isActive(), "the import command closes its context");
+        try (var context = new SpringApplicationBuilder(IngestionServiceApplication.class).run(settings(directory).toArray(String[]::new))) {
+            var jdbc = new org.springframework.jdbc.core.JdbcTemplate(context.getBean(javax.sql.DataSource.class));
+            assertEquals(1, jdbc.queryForObject("select count(*) from ingestion.repository_admissions where repository_id = '480'", Integer.class));
+            var base = URI.create("http://127.0.0.1:" + ((WebServerApplicationContext) context).getWebServer().getPort());
+            var path = "/internal/v1/capture/workflow-scopes/480/591";
+            var body = "{\"requestId\":\"" + java.util.UUID.randomUUID() + "\",\"correlationId\":\"c-1\",\"pipelineId\":\""
+                    + java.util.UUID.randomUUID() + "\",\"monitoringStatus\":\"ACTIVE\"}";
+            try (var client = HttpClient.newHttpClient()) {
+                var wrongRole = client.send(put(base, path, identity.workload("Pipeline.GitHubFacts.Read"), body), HttpResponse.BodyHandlers.ofString());
+                assertEquals(403, wrongRole.statusCode());
+                var synced = client.send(put(base, path, identity.workload("Pipeline.CaptureScope.Write"), body), HttpResponse.BodyHandlers.ofString());
+                assertEquals(200, synced.statusCode(), synced.body());
+                assertEquals("scope-r1", JSON.readTree(synced.body()).get("scopeRevision").asString());
+                var notAdmitted = client.send(put(base, "/internal/v1/capture/workflow-scopes/999/591",
+                        identity.workload("Pipeline.CaptureScope.Write"), body), HttpResponse.BodyHandlers.ofString());
+                assertEquals(404, notAdmitted.statusCode());
+                assertTrue(notAdmitted.body().contains("REPOSITORY_NOT_ADMITTED"));
+            }
+        }
+    }
+
+    private static HttpRequest put(URI base, String path, String token, String body) {
+        return HttpRequest.newBuilder(base.resolve(path)).header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + token).PUT(HttpRequest.BodyPublishers.ofString(body)).build();
     }
 
     @Test

@@ -11,7 +11,11 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.security.PrivateKey;
 import java.time.Clock;
 import java.util.function.Supplier;
-import org.pipesor.ingestion.capture.infrastructure.configuration.GitHubFileAuthority;
+import org.pipesor.ingestion.capture.infrastructure.configuration.CaptureAuthority;
+import org.pipesor.ingestion.capture.infrastructure.persistence.jdbc.JdbcCaptureAuthority;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.pipesor.ingestion.capture.infrastructure.credentials.KeyVaultAppMaterial;
 import org.pipesor.ingestion.capture.infrastructure.credentials.LocalAppSigningKey;
 import org.pipesor.ingestion.capture.infrastructure.github.GitHubAppJwtSigner;
@@ -86,11 +90,18 @@ public class GitHubConfiguration {
     }
 
     @Bean
-    GitHubFileAuthority githubFileAuthority(GitHubProperties github, Clock clock) {
-        var authority = new GitHubFileAuthority(github.authorityFile(), github.appId(), clock,
-                github.limits().authorityMaxFileBytes(), github.limits().authorityMaxEntries());
-        authority.validate();
-        return authority;
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(AuthorityImportRunner.OPTION)
+    AuthorityImportRunner authorityImportRunner(GitHubProperties github, JdbcCaptureAuthority authority,
+            PlatformTransactionManager transactions, org.springframework.context.ConfigurableApplicationContext context, Clock clock) {
+        return new AuthorityImportRunner(github, authority, transactions, context, clock);
+    }
+
+    /** ADR-023: the runtime authority reads owned tables only; the authority file is used by the import command. */
+    @Bean
+    JdbcCaptureAuthority captureAuthority(GitHubProperties github, JdbcTemplate jdbc, PlatformTransactionManager transactions,
+            Clock clock) {
+        return new JdbcCaptureAuthority(jdbc, new TransactionTemplate(transactions), github.appId(), github.captureDomain(),
+                github.limits().scopeReplayWindow(), clock);
     }
 
     @Bean
@@ -166,14 +177,14 @@ public class GitHubConfiguration {
     }
 
     @Bean
-    GitHubQueries githubQueries(ConnectedGitHubLink link, GitHubFileAuthority authority, GitHubReadProvider provider, Clock clock) {
+    GitHubQueries githubQueries(ConnectedGitHubLink link, CaptureAuthority authority, GitHubReadProvider provider, Clock clock) {
         return new GitHubQueryHandler(link, authority, provider, clock);
     }
 
     /** Vendor-HMAC ingress for the admitted machine scopes of the configured capture domain. */
     @Bean
     @org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty(name = "pipesor.github.webhook-enabled")
-    org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook githubWorkflowWebhook(GitHubProperties github,GitHubFileAuthority authority,
+    org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook githubWorkflowWebhook(GitHubProperties github,CaptureAuthority authority,
             AppMaterial material,org.pipesor.ingestion.capture.application.commandhandlers.CaptureHandler handler,
             org.pipesor.ingestion.shared.security.PlatformSecurityProperties platform) {
         var hook=new org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook.HookContext(github.captureDomain(),platform.tenantId(),github.appId());

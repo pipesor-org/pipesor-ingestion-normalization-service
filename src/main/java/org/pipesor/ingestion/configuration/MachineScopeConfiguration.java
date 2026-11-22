@@ -1,7 +1,7 @@
 package org.pipesor.ingestion.configuration;
 
 import java.time.Clock;
-import org.pipesor.ingestion.capture.infrastructure.configuration.GitHubFileAuthority;
+import org.pipesor.ingestion.capture.infrastructure.configuration.CaptureAuthority;
 import org.pipesor.ingestion.capture.interfaces.rest.MachineScopeServlet;
 import org.pipesor.ingestion.shared.security.PlatformSecurityProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -15,7 +15,7 @@ import org.springframework.context.annotation.Configuration;
 public class MachineScopeConfiguration {
     @Bean
     ServletRegistrationBean<MachineScopeServlet> machineScopeServlet(GitHubProperties github, PlatformSecurityProperties platform,
-            GitHubFileAuthority authority, Clock clock) {
+            CaptureAuthority authority, Clock clock) {
         var limits = github.limits();
         var settings = new MachineScopeServlet.Settings(platform.tenantId(), github.appId(), github.captureDomain(),
                 limits.machineScopeMaxRequestBytes(), limits.machineScopeMaxInFlight(), limits.machineScopeTimeout());

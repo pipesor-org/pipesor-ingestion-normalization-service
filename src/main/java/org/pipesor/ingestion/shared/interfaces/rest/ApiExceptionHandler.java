@@ -52,6 +52,10 @@ public class ApiExceptionHandler {
             default -> problem(503, "CAPTURE_UNAVAILABLE", failure, request);
         };
     }
+    @ExceptionHandler(GitHubAnalysisHandler.AnalysisPending.class)
+    ResponseEntity<Problem> analysisPending(GitHubAnalysisHandler.AnalysisPending failure, HttpServletRequest request) {
+        return problem(409, "CAPTURE_SCOPE_PENDING", failure, request);
+    }
     @ExceptionHandler(GitHubAnalysisHandler.AnalysisDenied.class)
     ResponseEntity<Problem> analysisDenied(GitHubAnalysisHandler.AnalysisDenied failure, HttpServletRequest request) {
         return problem(403, "DENIED", failure, request);

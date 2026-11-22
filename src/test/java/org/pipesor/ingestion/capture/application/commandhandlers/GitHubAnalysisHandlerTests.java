@@ -59,7 +59,8 @@ class GitHubAnalysisHandlerTests {
         access(true, "999");
         assertThrows(GitHubAnalysisHandler.AnalysisDenied.class, () -> handler.request(DISCOVER, TARGET, started, () -> {}));
         when(scopes.completedScope("pilot", TENANT, "480", "591")).thenReturn(Optional.empty());
-        assertThrows(GitHubAnalysisHandler.AnalysisDenied.class, () -> handler.request(DISCOVER,
+        // ADR-023: a workflow without an ACTIVE capture scope is pending, not denied.
+        assertThrows(GitHubAnalysisHandler.AnalysisPending.class, () -> handler.request(DISCOVER,
                 new GitHubAnalysisHandler.Target("480", "591", "7001", 2), started, () -> {}));
         verify(capture, times(1)).handle(any(), any(), anyInt(), any(), any());
     }

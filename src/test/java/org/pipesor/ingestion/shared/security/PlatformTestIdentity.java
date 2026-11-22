@@ -57,7 +57,7 @@ public final class PlatformTestIdentity implements AutoCloseable {
                 "pipesor.security.audience=urn:pipesor:api:ingestion",
                 "pipesor.security.trusted-workloads[0].id=pipeline",
                 "pipesor.security.trusted-workloads[0].jwks-uri=" + pipelineJwks(),
-                "pipesor.security.trusted-workloads[0].roles=Pipeline.MachineScope.Check,Pipeline.GitHubFacts.Read",
+                "pipesor.security.trusted-workloads[0].roles=Pipeline.MachineScope.Check,Pipeline.GitHubFacts.Read,Pipeline.CaptureScope.Write",
                 "pipesor.security.session.jwks-uri=" + sessionJwks(), "spring.profiles.active=local",
                 "management.endpoint.health.group.readiness.include=readinessState"));
         return settings;

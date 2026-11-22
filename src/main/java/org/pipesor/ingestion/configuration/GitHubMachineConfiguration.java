@@ -1,7 +1,7 @@
 package org.pipesor.ingestion.configuration;
 
 import java.time.Clock;
-import org.pipesor.ingestion.capture.infrastructure.configuration.GitHubFileAuthority;
+import org.pipesor.ingestion.capture.infrastructure.configuration.CaptureAuthority;
 import org.pipesor.ingestion.capture.infrastructure.github.GitHubAppJwtSigner;
 import org.pipesor.ingestion.capture.infrastructure.github.GitHubMachineTransport;
 import org.pipesor.ingestion.shared.security.TransportPolicy;
@@ -21,7 +21,7 @@ public class GitHubMachineConfiguration {
     }
 
     @Bean
-    GitHubMachineTransport githubMachineTransport(GitHubProperties github, TransportPolicy transport, GitHubFileAuthority authority,
+    GitHubMachineTransport githubMachineTransport(GitHubProperties github, TransportPolicy transport, CaptureAuthority authority,
             GitHubAppJwtSigner signer, GitHubMachineTransport.ArchiveLimits archive, Clock clock) {
         var limits = github.limits();
         return new GitHubMachineTransport(GitHubConfiguration.http(limits.machineTimeout()), transport.require(github.apiBaseUrl()),

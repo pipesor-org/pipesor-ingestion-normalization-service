@@ -10,7 +10,7 @@ import org.pipesor.ingestion.auth.application.ports.SessionIssuer;
 import org.pipesor.ingestion.auth.application.services.GitHubLogin;
 import org.pipesor.ingestion.auth.infrastructure.github.GitHubAuthorizeUrls;
 import org.pipesor.ingestion.auth.infrastructure.persistence.JdbcLoginAttempts;
-import org.pipesor.ingestion.capture.infrastructure.configuration.GitHubFileAuthority;
+import org.pipesor.ingestion.capture.infrastructure.configuration.CaptureAuthority;
 import org.pipesor.ingestion.github.application.ports.ConnectionStatusReader;
 import org.pipesor.ingestion.github.application.ports.GitHubCredentialCustody;
 import org.pipesor.ingestion.github.application.ports.GitHubUserTokens;
@@ -65,7 +65,7 @@ public class SessionConfiguration {
 
     @Bean
     GitHubLogin githubLogin(PlatformSecurityProperties platform, LoginAttempts attempts, GitHubAuthorization authorization,
-            GitHubUserTokens tokens, GitHubReadProvider directory, GitHubFileAuthority admissions,
+            GitHubUserTokens tokens, GitHubReadProvider directory, CaptureAuthority admissions,
             GitHubCredentialCustody custody, GitHubConnections connections, ConnectionStatusReader statuses,
             SessionTokens sessions, Clock clock) {
         SessionIssuer issuer = githubUserId -> {

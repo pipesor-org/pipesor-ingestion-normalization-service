@@ -28,7 +28,6 @@ public record GitHubProperties(
         if (apiVersion == null || !apiVersion.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}")) {
             throw new IllegalArgumentException("pipesor.github.api-version must be a dated GitHub API version");
         }
-        Objects.requireNonNull(authorityFile, "pipesor.github.authority-file is required");
         if (captureDomain == null || !captureDomain.matches("[A-Za-z0-9._:-]{1,128}")) {
             throw new IllegalArgumentException("pipesor.github.capture-domain is required");
         }
@@ -66,10 +65,11 @@ public record GitHubProperties(
             Duration oauthTimeout, int oauthMaxResponseBytes, Duration vaultTimeout, int maxSecretBytes,
             int authorityMaxFileBytes, int authorityMaxEntries, int maxRunPages,
             Duration machineScopeTimeout, int machineScopeMaxRequestBytes, int machineScopeMaxInFlight,
-            Duration webhookTimeout, int webhookMaxBodyBytes, int webhookMaxHeaderChars, int webhookMaxInFlight) {
+            Duration webhookTimeout, int webhookMaxBodyBytes, int webhookMaxHeaderChars, int webhookMaxInFlight,
+            Duration scopeReplayWindow) {
         public Limits {
             for (var duration : new Duration[] {userTimeout, machineTimeout, appJwtTtl, oauthTimeout, vaultTimeout,
-                    machineScopeTimeout, webhookTimeout}) {
+                    machineScopeTimeout, webhookTimeout, scopeReplayWindow}) {
                 if (duration == null || duration.isNegative() || duration.isZero()) {
                     throw new IllegalArgumentException("Positive pipesor.github.limits durations are required");
                 }
