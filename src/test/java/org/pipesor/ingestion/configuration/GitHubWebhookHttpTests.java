@@ -39,10 +39,9 @@ class GitHubWebhookHttpTests {
     static final CaptureScope SCOPE=new CaptureScope("pilot",UUID.fromString("11111111-1111-4111-8111-111111111111"),"120","240","360","480","590","r1");
     static volatile boolean keyUnavailable;
     static ConfigurableApplicationContext context;static URI base;
-    @Configuration(proxyBeanMethods=false) @EnableAutoConfiguration(excludeName="org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration")
-    @Import({GitHubWebhookConfiguration.class,ApiSecurityConfiguration.class,OpenApiConfiguration.class})
+    @Configuration(proxyBeanMethods=false) @EnableAutoConfiguration(excludeName={"org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration","org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration","org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration"})
+    @Import({GitHubWebhookConfiguration.class,org.pipesor.ingestion.shared.security.PlatformSecurityConfiguration.class,WebConfiguration.class,OpenApiConfiguration.class})
     static class Application {
-        @Bean @Primary JwtDecoder localJwtDecoder(ApiProperties properties){var decoder=NimbusJwtDecoder.withPublicKey((RSAPublicKey)RSA.getPublic()).build();decoder.setJwtValidator(ApiSecurityConfiguration.validator(properties.security(),Clock.systemUTC()));return decoder;}
         @Bean CaptureHandler captureHandler(){return mock(CaptureHandler.class);}
         @Bean GitHubWorkflowWebhook webhook(CaptureHandler handler){return new GitHubWorkflowWebhook(new GitHubWorkflowWebhook.HookContext("pilot",SCOPE.tenantId(),"120"),()->{if(keyUnavailable)throw new IllegalStateException("private-key-error");return KEY;},source->new GitHubWorkflowWebhook.Authorization(SCOPE,Instant.now().plusSeconds(600)),Set.of("completed"),1024,handler);}
     }
@@ -50,16 +49,22 @@ class GitHubWebhookHttpTests {
     @AfterAll static void close(){context.close();}
     @BeforeEach void resetHandler(){keyUnavailable=false;var handler=context.getBean(CaptureHandler.class);reset(handler);when(handler.accept(any())).thenReturn(mock(CaptureReceipt.class));}
     static SpringApplicationBuilder application(){return application(true);}
-    static SpringApplicationBuilder application(boolean enabled){return new SpringApplicationBuilder(Application.class).initializers(c->org.springframework.boot.test.util.TestPropertyValues.of(
-            "server.port=0","server.address=127.0.0.1","ingestion.github-webhook.enabled="+enabled,"springdoc.api-docs.enabled=true","ingestion.github-webhook.request-timeout=200ms","ingestion.github-webhook.max-header-chars=512","ingestion.github-webhook.max-in-flight=1","ingestion.github-machine.max-body-bytes=1024",
-            "ingestion.api.security.issuer=https://login.example.invalid/tenant/v2.0","ingestion.api.security.jwk-set-uri=https://login.example.invalid/keys","ingestion.api.security.tenant=11111111-1111-4111-8111-111111111111","ingestion.api.security.audience=api://test","ingestion.api.security.token-version=2.0","ingestion.api.security.self-scope=github.self","ingestion.api.security.internal-scope=github.verify","ingestion.api.security.self-callers=22222222-2222-4222-8222-222222222222","ingestion.api.security.pipeline-callers=33333333-3333-4333-8333-333333333333","ingestion.api.security.clock-skew=0s",
-            "ingestion.api.limits.request-timeout=5s","ingestion.api.limits.max-batch-size=5","ingestion.api.limits.max-page-size=5","ingestion.api.limits.max-request-bytes=16384","ingestion.api.limits.max-response-bytes=10000","ingestion.api.limits.max-context-length=128").applyTo(c));}
+    static final org.pipesor.ingestion.shared.security.PlatformTestIdentity IDENTITY=new org.pipesor.ingestion.shared.security.PlatformTestIdentity();
+    static SpringApplicationBuilder application(boolean enabled){
+        java.nio.file.Path keys;
+        try{keys=java.nio.file.Files.createTempDirectory("webhook-keys");}catch(java.io.IOException failure){throw new IllegalStateException(failure);}
+        var settings=new ArrayList<>(IDENTITY.properties(keys));
+        settings.addAll(GitHubTestSettings.properties(keys));
+        settings.addAll(List.of("server.port=0","server.address=127.0.0.1","pipesor.github.webhook-enabled="+enabled,"springdoc.api-docs.enabled=true",
+                "pipesor.github.limits.webhook-timeout=200ms","pipesor.github.limits.webhook-max-header-chars=512","pipesor.github.limits.webhook-max-in-flight=1","pipesor.github.limits.webhook-max-body-bytes=1024"));
+        return new SpringApplicationBuilder(Application.class).profiles("local").initializers(c->org.springframework.boot.test.util.TestPropertyValues.of(settings.toArray(String[]::new)).applyTo(c));
+    }
     HttpResponse<String> post(String body,String event,String signature,String... extra)throws Exception {
         var request=HttpRequest.newBuilder(base.resolve(PATH)).timeout(Duration.ofSeconds(3)).header("Content-Type","application/json").header("X-GitHub-Event",event).header("X-GitHub-Delivery","delivery-http");if(signature!=null)request.header("X-Hub-Signature-256",signature);for(int i=0;i<extra.length;i+=2)request.header(extra[i],extra[i+1]);
         try(var client=HttpClient.newHttpClient()){return client.send(request.POST(HttpRequest.BodyPublishers.ofString(body)).build(),HttpResponse.BodyHandlers.ofString());}
     }
     static String sign(String body)throws Exception{var mac=Mac.getInstance("HmacSHA256");mac.init(new SecretKeySpec(KEY,"HmacSHA256"));return "sha256="+HexFormat.of().formatHex(mac.doFinal(body.getBytes(StandardCharsets.UTF_8)));}
-    @Test void vendorRequiresHmacButNoEntraJwtAndAcknowledgesOnlyAfterUseCaseReturns()throws Exception {
+    @Test void vendorRequiresHmacButNoPlatformTokenAndAcknowledgesOnlyAfterUseCaseReturns()throws Exception {
         var response=post(BODY,"workflow_run",sign(BODY));assertEquals(204,response.statusCode(),response.body());assertEquals("",response.body());assertEquals("no-store",response.headers().firstValue("Cache-Control").orElseThrow());verify(context.getBean(CaptureHandler.class)).accept(any());
     }
     @Test void signedPingAndUnselectedActionsAreIgnoredButChangedEventCannotHideSelectedRun()throws Exception {
@@ -125,10 +130,9 @@ class GitHubWebhookHttpTests {
         }
         verify(context.getBean(CaptureHandler.class),never()).accept(any());
     }
-    @Test void protectedGeneratedOpenApiDescribesHmacOnlyWhenTheServletIsEnabled()throws Exception {
+    @Test void generatedOpenApiDescribesHmacOnlyWhenTheServletIsEnabled()throws Exception {
         try(var client=HttpClient.newHttpClient()){
-            assertEquals(401,client.send(HttpRequest.newBuilder(base.resolve("/v3/api-docs")).GET().build(),HttpResponse.BodyHandlers.ofString()).statusCode());
-            var response=client.send(HttpRequest.newBuilder(base.resolve("/v3/api-docs")).header("Authorization","Bearer "+pipelineToken()).GET().build(),HttpResponse.BodyHandlers.ofString());assertEquals(200,response.statusCode(),response.body());
+            var response=client.send(HttpRequest.newBuilder(base.resolve("/v3/api-docs")).GET().build(),HttpResponse.BodyHandlers.ofString());assertEquals(200,response.statusCode(),response.body());
             var schema=JSON.readTree(response.body());var operation=schema.get("paths").get(PATH).get("post");assertEquals(0,operation.get("security").size());assertTrue(operation.get("parameters").toString().contains("X-Hub-Signature-256"));assertTrue(operation.get("parameters").toString().contains("exact transmitted bytes"));
             var signatureHeader=java.util.stream.StreamSupport.stream(operation.get("parameters").spliterator(),false).filter(p->p.get("name").asString().equals("X-Hub-Signature-256")).findFirst().orElseThrow();
             var signaturePattern=java.util.regex.Pattern.compile(signatureHeader.get("schema").get("pattern").asString());
@@ -136,12 +140,11 @@ class GitHubWebhookHttpTests {
             assertEquals(Set.of("204","400","403","409","413","415","503"),new HashSet<>(operation.get("responses").propertyNames()));assertFalse(response.body().contains("synthetic-hook-HTTP-key"));assertFalse(schema.get("components").get("securitySchemes").toString().contains("apiKey"));
             try(var disabled=application(false).run()){
                 var uri=URI.create("http://127.0.0.1:"+((WebServerApplicationContext)disabled).getWebServer().getPort()+"/v3/api-docs");
-                var hidden=client.send(HttpRequest.newBuilder(uri).header("Authorization","Bearer "+pipelineToken()).GET().build(),HttpResponse.BodyHandlers.ofString());assertEquals(200,hidden.statusCode(),hidden.body());var paths=JSON.readTree(hidden.body()).get("paths");assertTrue(paths==null||!paths.has(PATH));
+                var hidden=client.send(HttpRequest.newBuilder(uri).GET().build(),HttpResponse.BodyHandlers.ofString());assertEquals(200,hidden.statusCode(),hidden.body());var paths=JSON.readTree(hidden.body()).get("paths");assertTrue(paths==null||!paths.has(PATH));
             }
         }
     }
     static KeyPair keys(){try{var generator=KeyPairGenerator.getInstance("RSA");generator.initialize(2048);return generator.generateKeyPair();}catch(Exception failure){throw new ExceptionInInitializerError(failure);}}
-    static String pipelineToken()throws Exception{var claims=new JWTClaimsSet.Builder().issuer("https://login.example.invalid/tenant/v2.0").audience("api://test").issueTime(new Date()).expirationTime(Date.from(Instant.now().plusSeconds(120))).claim("ver","2.0").claim("tid","11111111-1111-4111-8111-111111111111").claim("oid","44444444-4444-4444-8444-444444444444").claim("azp","33333333-3333-4333-8333-333333333333").claim("scp","github.verify").build();var jwt=new SignedJWT(new JWSHeader(JWSAlgorithm.RS256),claims);jwt.sign(new RSASSASigner(RSA.getPrivate()));return jwt.serialize();}
     @Test void wrongMethodsAndFrameworkEndpointsAreNotPublic()throws Exception {
         try(var client=HttpClient.newHttpClient()){
             assertEquals(403,client.send(HttpRequest.newBuilder(base.resolve(PATH)).GET().build(),HttpResponse.BodyHandlers.ofString()).statusCode());

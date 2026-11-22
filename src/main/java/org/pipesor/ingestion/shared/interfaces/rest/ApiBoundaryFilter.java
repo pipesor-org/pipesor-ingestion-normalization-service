@@ -10,7 +10,7 @@ import org.springframework.web.util.ContentCachingResponseWrapper;
 
 /** Bounds bodies before JSON parsing and rejects ambient credential/header identity channels. */
 public final class ApiBoundaryFilter extends OncePerRequestFilter {
-    public static final String CORRELATION = ApiBoundaryFilter.class.getName() + ".correlation";
+    public static final String CORRELATION = org.pipesor.ingestion.shared.security.ProblemResponses.CORRELATION_ATTRIBUTE;
     private final ApiProperties.Limits limits;
     public ApiBoundaryFilter(ApiProperties.Limits limits) { this.limits = limits; }
     @Override

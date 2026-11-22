@@ -1,6 +1,5 @@
 package org.pipesor.ingestion.configuration;
 
-import com.azure.identity.AzureCliCredentialBuilder;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
@@ -19,7 +18,6 @@ import org.pipesor.ingestion.capture.infrastructure.credentials.LocalAppSigningK
 import org.pipesor.ingestion.capture.infrastructure.github.GitHubAppJwtSigner;
 import org.pipesor.ingestion.capture.infrastructure.github.GitHubMachineTransport;
 import org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook.HookContext;
-import org.pipesor.ingestion.github.infrastructure.custody.KeyVaultCredentialCustody;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.support.ResourcePropertySource;
 import org.springframework.mock.env.MockEnvironment;
@@ -48,11 +46,7 @@ public final class GitHubAcquisitionControl {
         try {
             var env = new MockEnvironment();
             env.getPropertySources().addFirst(new ResourcePropertySource(new FileSystemResource(args[0])));
-            if (env.containsProperty("control.signing-key-file")) {
-                checkLocal(env, args[1]);
-            } else {
-                check(env, args[1]);
-            }
+            checkLocal(env, args[1]);
         } catch (CaptureFailure failure) {
             System.err.println("Acquisition refused: " + failure.reason());
             System.exit(1);
@@ -60,34 +54,6 @@ public final class GitHubAcquisitionControl {
             System.err.println("Acquisition configuration or authority unavailable.");
             System.exit(1);
         }
-    }
-
-    static void check(MockEnvironment env, String runId) {
-        if (!"true".equals(env.getProperty("ingestion.github-machine.enabled"))) {
-            throw new IllegalArgumentException();
-        }
-        var machine = new GitHubMachineConfiguration();
-        var settings = machine.githubMachineSettings(env);
-        if (!settings.appId().equals("5722735")) throw new IllegalArgumentException();
-        var clock = Clock.systemUTC();
-        var file = machine.githubFileAuthority(settings, clock);
-        var route = new HookContext(settings.domain(), settings.tenant(), settings.appId());
-        var control = CONTROLS.get(runId);
-        var scope = new CaptureScope(route.captureDomain(), route.tenantId(), route.appId(), "341855203",
-                "181117842", "1446318020", control.workflow(), env.getRequiredProperty("control.scope-revision"));
-        CurrentMachineScope authority = candidate -> file.verifyProtectedEvidenceScope(route, candidate.context(), candidate.pipeline());
-        var vault = KeyVaultCredentialCustody.secretClient(settings.vault(), settings.vaultTimeout(), () -> new AzureCliCredentialBuilder()
-                .tenantId(UUID.fromString(env.getRequiredProperty("control.azure-tenant")).toString())
-                .subscription(UUID.fromString(env.getRequiredProperty("control.azure-subscription")).toString())
-                .processTimeout(settings.vaultTimeout()).build());
-        var signer = machine.githubAppJwtSigner(settings, machine.githubAppMaterial(settings, vault), clock);
-        var preparation = new CapturePreparationConfiguration();
-        var profile = preparation.verifyPreparationProfile(env);
-        var transport = new GitHubMachineTransport(authority, signer, settings.appId(), settings.version(),
-                settings.operationBudget(), settings.pageSize(), settings.maxPages(), settings.maxJobs(),
-                settings.maxResponseBytes(), settings.maxLogBytes(), preparation.captureArchiveLimits(env),
-                settings.downloadHosts(), clock);
-        classify(scope, runId, control, transport, profile);
     }
 
     private static void checkLocal(MockEnvironment env, String runId) {
@@ -109,12 +75,13 @@ public final class GitHubAcquisitionControl {
         var keyDigest = env.getRequiredProperty("control.signing-key-sha256");
         var signer = new GitHubAppJwtSigner(route.appId(), () -> LocalAppSigningKey.read(keyFile, keyDigest), clock,
                 Duration.ofMinutes(4), Duration.ofSeconds(30));
-        var preparation = new CapturePreparationConfiguration();
-        var transport = new GitHubMachineTransport(authority, signer, route.appId(),
+        var transport = new GitHubMachineTransport(java.net.http.HttpClient.newBuilder().followRedirects(java.net.http.HttpClient.Redirect.NEVER).build(),
+                java.net.URI.create("https://api.github.com"), authority, signer, route.appId(),
                 env.getRequiredProperty("ingestion.github-machine.api-version"), Duration.ofSeconds(35),
-                100, 2, 100, 4_000_000, 1_000_000, preparation.captureArchiveLimits(env),
+                100, 2, 100, 4_000_000, 1_000_000, new GitHubMachineTransport.ArchiveLimits(1048576, 8388608, 100, 1048576),
                 Set.of("results-receiver.actions.githubusercontent.com"), clock);
-        classify(scope, runId, control, transport, preparation.verifyPreparationProfile(env));
+        classify(scope, runId, control, transport,
+                new org.pipesor.ingestion.capture.application.services.VerifyPreparationProfile(1048576));
     }
 
     private static void classify(CaptureScope scope, String runId, Control control, GitHubMachineTransport transport,

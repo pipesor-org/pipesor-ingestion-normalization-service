@@ -8,10 +8,13 @@ import org.pipesor.ingestion.configuration.ApiProperties;
 import org.pipesor.ingestion.github.domain.model.valueobjects.*;
 import org.springframework.security.oauth2.jwt.Jwt;
 
-/** Claims are used only after the resource server has verified the delegated token. */
+/**
+ * Claims are used only after the platform decoder verified the token: a session token on human routes,
+ * or the subject token (contract §4) next to a Pipeline workload token on internal routes.
+ */
 public record RequestContext(String requestId, AccessContext access, UUID actorObjectId, UUID subjectObjectId,
                              Instant startedAt, Instant validUntil) {
-    public static RequestContext internal(Jwt jwt, HttpServletRequest request, String requestId, String correlationId,
+    public static RequestContext internal(Jwt subject, Jwt workload, HttpServletRequest request, String requestId, String correlationId,
                                           Instant deadline, AccessOperation operation, UUID recipient,
                                           ApiProperties.Limits limits, Clock clock) {
         if (!ApiBoundaryFilter.validContext(requestId, limits.maxContextLength()) || deadline == null || operation == null
@@ -19,7 +22,8 @@ public record RequestContext(String requestId, AccessContext access, UUID actorO
             throw new ApiFailure(400, "INVALID_REQUEST");
         }
         if (recipient != null && !operation.permitsDifferentSubject()) { throw new ApiFailure(403, "DENIED"); }
-        return create(jwt, requestId, correlationId, deadline, operation, recipient, limits, clock);
+        var bounded = workload.getExpiresAt() != null && workload.getExpiresAt().isBefore(deadline) ? workload.getExpiresAt() : deadline;
+        return create(subject, requestId, correlationId, bounded, operation, recipient, limits, clock);
     }
     public static RequestContext self(Jwt jwt, HttpServletRequest request, ApiProperties.Limits limits, Clock clock) {
         return create(jwt, UUID.randomUUID().toString(), ApiExceptionHandler.correlation(request),

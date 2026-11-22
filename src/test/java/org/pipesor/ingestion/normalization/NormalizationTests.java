@@ -13,7 +13,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.pipesor.ingestion.configuration.NormalizationConfiguration;
 import org.pipesor.ingestion.normalization.application.commandhandlers.NormalizeObservationHandler;
 import org.pipesor.ingestion.normalization.application.commands.NormalizeObservationCommand;
 import org.pipesor.ingestion.normalization.application.ports.EvidenceProtection;
@@ -280,18 +279,8 @@ class NormalizationTests {
     }
 
     @Test
-    void compositionRequiresRealProtectionPortAndHasNoPermissiveFallback() {
-        new ApplicationContextRunner().withUserConfiguration(NormalizationConfiguration.class).run(context -> {
-            assertNull(context.getStartupFailure());
-            assertTrue(context.getBeansOfType(NormalizeObservationHandler.class).isEmpty());
-            assertNotNull(context.getBean(NormalizedMessagesTransformer.class));
-        });
-        new ApplicationContextRunner().withUserConfiguration(NormalizationConfiguration.class)
-                .withBean(EvidenceProtection.class, () -> POLICY).run(context -> {
-                    assertNull(context.getStartupFailure());
-                    assertEquals(2, context.getBean(NormalizedMessagesTransformer.class)
-                            .toMessages(context.getBean(NormalizeObservationHandler.class).handle(command(1))).size());
-                });
+    void theRealProtectionPortFeedsBothMessages() {
+        assertEquals(2, new NormalizedMessagesTransformer().toMessages(new NormalizeObservationHandler(POLICY).handle(command(1))).size());
     }
 
     private static WorkflowObservation copy(WorkflowObservation source, Execution execution, String sha, String service,

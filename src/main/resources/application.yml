@@ -1,40 +1,142 @@
 spring:
+  application:
+    name: pipesor-ingestion-normalization-service
+  datasource:
+    url: ${PIPESOR_DATABASE_URL}
+    username: ${PIPESOR_DATABASE_USERNAME:}
+    password: ${PIPESOR_DATABASE_PASSWORD:}
+  flyway:
+    enabled: true
+    schemas: ingestion
+    default-schema: ingestion
   jpa:
     hibernate:
       ddl-auto: validate
     open-in-view: false
-  flyway:
-    enabled: false
   sql:
     init:
       mode: never
+  threads:
+    virtual:
+      enabled: true
+
 server:
-  address: ${INGESTION_HTTP_ADDRESS:127.0.0.1}
-  port: ${INGESTION_HTTP_PORT}
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
 springdoc:
   api-docs:
     enabled: false
   swagger-ui:
     enabled: false
-ingestion:
-  github-machine:
-    enabled: false
-  github-webhook:
-    enabled: false
-  capture-preparation:
-    enabled: false
-  preparation-worker:
-    enabled: false
-  preparation-scheduler:
-    enabled: false
-  publication-worker:
-    enabled: false
+
+# Platform identity (PIPESOR_TENANT_ID, PIPESOR_WORKLOAD_ID, PIPESOR_SIGNING_KEY_FILE|ID,
+# PIPESOR_SECURITY_AUDIENCE, PIPESOR_SECURITY_TRUSTEDWORKLOADS_n_*, PIPESOR_SECURITY_SESSION_JWKSURI,
+# PIPESOR_SESSION_SIGNING_KEY_FILE|ID, PIPESOR_SERVICE_BUS_*, PIPESOR_GITHUB_*) bind through relaxed binding.
+pipesor:
+  session:
+    dashboard-origin: ${PIPESOR_DASHBOARD_ORIGIN}
+    lifetime: 1h
+  service-bus:
+    topic: workflow-evidence
+    try-timeout: 10s
+    max-retries: 2
+    retry-delay: 1s
+    retry-max-delay: 5s
+  api:
+    limits:
+      request-timeout: 15s
+      max-batch-size: 100
+      max-page-size: 100
+      max-request-bytes: 16384
+      max-response-bytes: 1048576
+      max-context-length: 128
+  github:
+    api-base-url: https://api.github.com
+    web-base-url: https://github.com
+    api-version: "2022-11-28"
+    webhook-enabled: false
+    private-key-secret-name: github-app-private-key
+    client-secret-name: github-app-client-secret
+    webhook-secret-name: github-webhook-secret
+    limits:
+      user-timeout: 12s
+      user-page-size: 100
+      user-max-pages: 8
+      user-max-items: 500
+      user-max-response-bytes: 4000000
+      machine-timeout: 35s
+      machine-page-size: 100
+      machine-max-pages: 2
+      machine-max-jobs: 100
+      machine-max-response-bytes: 4000000
+      machine-max-log-bytes: 1048576
+      download-hosts: results-receiver.actions.githubusercontent.com
+      app-jwt-ttl: 4m
+      app-jwt-issued-at-skew: 30s
+      oauth-timeout: 10s
+      oauth-max-response-bytes: 16384
+      vault-timeout: 10s
+      max-secret-bytes: 24000
+      authority-max-file-bytes: 65536
+      authority-max-entries: 64
+      max-run-pages: 10
+      machine-scope-timeout: 5s
+      machine-scope-max-request-bytes: 4096
+      machine-scope-max-in-flight: 16
+      webhook-timeout: 5s
+      webhook-max-body-bytes: 1048576
+      webhook-max-header-chars: 512
+      webhook-max-in-flight: 16
   capture:
-    enabled: false
-  messaging:
-    enabled: false
-  protection:
-    enabled: false
+    workers-enabled: true
+    max-message-bytes: 262144
+    archive:
+      max-compressed-bytes: 1048576
+      max-expanded-bytes: 8388608
+      max-entries: 100
+      max-step-bytes: 1048576
+    protection:
+      version: verify-protection-v1
+      max-input-bytes: 1048576
+      max-output-chars: 65536
+      max-redactions: 128
+    preparation:
+      batch-size: 5
+      budget: 60s
+      interval: 5s
+      lease: 2m
+      recovery-window: 7d
+      shutdown-timeout: 10s
+    publication:
+      batch-size: 10
+      budget: 20s
+      interval: 5s
+      lease: 30s
+      retry-delay: 30s
+      shutdown-timeout: 10s
+
 logging:
   level:
     org.hibernate.orm.jdbc.error: OFF
@@ -42,3 +144,12 @@ logging:
     org.hibernate.engine.jdbc.spi.SqlExceptionHelper: OFF
     org.hibernate.SQL: OFF
     org.hibernate.orm.jdbc.bind: OFF
+
+---
+spring:
+  config:
+    activate:
+      on-profile: azure
+  datasource:
+    # Passwordless Entra authentication with the workload identity.
+    url: ${PIPESOR_DATABASE_URL}&authenticationPluginClassName=com.azure.identity.extensions.jdbc.postgresql.AzurePostgresqlAuthenticationPlugin

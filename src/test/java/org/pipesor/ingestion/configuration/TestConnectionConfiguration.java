@@ -12,27 +12,21 @@ import org.pipesor.ingestion.github.infrastructure.persistence.jpa.JpaConnection
 import org.pipesor.ingestion.github.infrastructure.persistence.jpa.JpaConnectionStatusReader;
 import org.pipesor.ingestion.github.infrastructure.persistence.jpa.TransactionalGitHubConnections;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
+
 import org.springframework.orm.jpa.SharedEntityManagerCreator;
 import org.springframework.transaction.PlatformTransactionManager;
 
-/** Metadata commands only. Database rows do not establish operational authorization after restore. */
-@Configuration(proxyBeanMethods = false)
-public class GitHubPersistenceConfiguration {
-    @Bean
-    ConnectionRepository connectionRepository(EntityManagerFactory factory) {
+/** The production connection metadata beans, without GitHub App material. */
+
+public class TestConnectionConfiguration {
+    @Bean ConnectionRepository connectionRepository(EntityManagerFactory factory) {
         return new JpaConnectionRepository(SharedEntityManagerCreator.createSharedEntityManager(factory));
     }
-    @Bean
-    GitHubConnections githubConnections(ConnectionRepository repository, Clock clock, PlatformTransactionManager manager) {
+    @Bean GitHubConnections githubConnections(ConnectionRepository repository, Clock clock, PlatformTransactionManager manager) {
         return new TransactionalGitHubConnections(new GitHubConnectionHandler(repository, clock), manager);
     }
-    @Bean
-    ConnectionStatusReader connectionStatusReader(EntityManagerFactory factory, PlatformTransactionManager manager) {
+    @Bean ConnectionStatusReader connectionStatusReader(EntityManagerFactory factory, PlatformTransactionManager manager) {
         return new JpaConnectionStatusReader(SharedEntityManagerCreator.createSharedEntityManager(factory), manager);
     }
-    @Bean
-    GitHubConnectionQueries githubConnectionQueries(ConnectionStatusReader reader) {
-        return new GitHubConnectionQueryHandler(reader);
-    }
+    @Bean GitHubConnectionQueries githubConnectionQueries(ConnectionStatusReader reader) { return new GitHubConnectionQueryHandler(reader); }
 }

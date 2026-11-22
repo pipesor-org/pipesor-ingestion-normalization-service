@@ -1,0 +1,9 @@
+# Local profile: loopback HTTP, operator files under ~/.config/pipesor-local (0700/0600).
+pipesor:
+  github:
+    custody-directory: ${PIPESOR_GITHUB_CUSTODY_DIRECTORY:${user.home}/.config/pipesor-local/custody}
+    callback-url: ${PIPESOR_GITHUB_CALLBACK_URL:http://127.0.0.1:8081/api/v1/auth/github/callback}
+
+springdoc:
+  api-docs:
+    enabled: true

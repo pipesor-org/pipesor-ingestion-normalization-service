@@ -4,11 +4,11 @@ Ingestion and Normalization Service captures authorized workflow evidence, prote
 
 The [approved ADR-020 evolution](docs/architecture.md#approved-github-access-evolution) also assigns GitHub user connection, discovery and verified access/metadata to this service; DD-020 additionally records the locally approved metadata/custody design. Runtime identity, callback, admission, recovery and delivery inputs remain distinct from that approval.
 
-This repository contains a Java 25 / Spring Boot application with a servlet HTTP composition root, GitHub facts/discovery, PostgreSQL connector metadata, bounded evidence protection, normalized message preparation and an owned durable capture/publication ledger. Ingestion reports current admitted/readable/administrator facts; Pipeline owns registration, grants and the decision about AIOps capabilities. The HTTP boundary validates delegated Entra JWTs and caller channels; an opt-in Azure SDK publisher, local container recipe and CI verification/main-candidate publication are implemented. Private OAuth token transport and exact-version Key Vault custody are also implemented, without activating a connection executor. A private GitHub user/App read provider implements identity, repository discovery/access and workflow metadata. Machine capture now has opt-in file authority, exact-version App material custody, RS256 signing, installation-token reads and an authenticated durable webhook endpoint. The legacy approved Verify pilot profile classifies proven per-step source phases and an explicit receipt operation connects source reads, protection and durable preparation. An explicit bounded batch dispatcher selects unclaimed accepted receipts for preparation. A separate opt-in scheduler can invoke those batches with the approved lease/recovery policy. Browser connection and operational restore/cleanup remain pending. Pipeline owns the calling-side Entra OBO integration; this service validates its delegated tokens.
+This repository contains a Java 25 / Spring Boot application (one image, profiles `local` and `azure`) with GitHub facts/discovery, the GitHub login and session issuance of the [platform identity contract v1](https://github.com/pipesor-org/pipesor-docs/blob/main/docs/architecture/contracts/platform-identity-v1.md) (ADR-022), PostgreSQL connector metadata, bounded evidence protection, normalized message preparation and an owned durable capture/publication ledger. Ingestion reports current admitted/readable/administrator facts; Pipeline owns registration, grants and the decision about AIOps capabilities. Every inbound request is verified by the platform decoder: human routes require a Pipesor session token with scope `GitHub.Self`; Pipeline's internal routes require its workload token with the catalog role (plus the user's session as subject token for GitHub facts). Capture requests only record durable intent; the preparation and publication workers protect, freeze and publish to Azure Service Bus. See [Runtime configuration](#runtime-configuration), [Routes](#routes) and [Local login walkthrough](#local-login-walkthrough).
 
 The [GitHub read-provider boundary](docs/deployment-contract.md#github-read-provider-implementation-boundary) uses user access tokens, complete bounded pagination and exact request/generation binding. It refuses partial/ambiguous provider results and has no runtime bean or production credential supplier. This does not activate a real connection or prove restore safety.
 
-The [durable publication worker](docs/deployment-contract.md#durable-publication-worker) scans ready origin receipts and sends frozen outputs through the existing scope/claim/fencing path. It rotates past failing work, enforces bounded ticks and has a managed opt-in runner with explicit scheduling/shutdown inputs. `ingestion.publication-worker.enabled` is false by default; this adds no webhook, GitHub capture or operational scope authority.
+The [durable publication worker](docs/deployment-contract.md#durable-publication-worker) scans ready origin receipts and sends frozen outputs through the existing scope/claim/fencing path. It rotates past failing work, enforces bounded ticks and runs with the preparation runner in every deployment (`pipesor.capture.workers-enabled=false` exists only for automated tests).
 
 The opt-in [machine/webhook adapters](docs/deployment-contract.md#machine-and-webhook-configuration-handoff) verify the App/installation and exact attempt, protect signed-download credentials and authenticate original webhook bytes before durable acceptance. The approved public webhook route is absent by default and has explicit body, time and in-flight limits. The operator-owned configuration is reread on every authorization check; failure never reuses a last-good authorization snapshot. The opt-in preparation handler reads bounded attempt archives in memory, applies the [approved Verify profile](docs/deployment-contract.md#verify-preparation-profile-v1--approved-locally), and freezes a protected plan with reserved message IDs. It runs for an explicitly supplied receipt/claim and recovery horizon. The [preparation dispatcher](docs/deployment-contract.md#explicit-preparation-dispatch--local-implementation) can select a bounded batch using caller-supplied absolute horizons; it is disabled by default and installs no scheduler, HTTP preparation command or automatic recovery by itself. The separately enabled [preparation scheduler](docs/deployment-contract.md#continuous-preparation-scheduling--approved-locally) computes fixed horizons at each batch start, prevents overlap and uses bounded shutdown; it introduces no automatic discard or unblock. This does not imply the complete capture → preparation → publication path is active.
 
@@ -23,7 +23,7 @@ The opt-in [machine/webhook adapters](docs/deployment-contract.md#machine-and-we
 
 ## Read-only GitHub acquisition control
 
-From this checkout, after an operator supplies the authority file and approved vault references in the [acquisition handoff](docs/deployment-contract.md#real-github-acquisition-controls), run one named historical control:
+From this checkout, after an operator supplies the authority file and a pinned local App key (see the end of [Full local delivery verification](#full-local-delivery-verification)), run one named historical control:
 
 ```bash
 ./mvnw -B -ntp test-compile org.apache.maven.plugins:maven-dependency-plugin:3.10.0:build-classpath -DincludeScope=test -Dmdep.outputFile=target/acquisition-test.cp
@@ -35,7 +35,7 @@ The test-classpath command uses the actual Java machine transport and file-backe
 
 ## Development and verification
 
-The [development baseline](docs/deployment-contract.md#development-baseline) records the selected toolchain and dependency policy. The [entry point](src/main/java/org/pipesor/ingestion/IngestionServiceApplication.java), [query configuration](src/main/java/org/pipesor/ingestion/configuration/GitHubConfiguration.java) and [metadata configuration](src/main/java/org/pipesor/ingestion/configuration/GitHubPersistenceConfiguration.java) compose the application with an HTTP listener and required explicit identity/limit settings. Optional capture, messaging and protection are disabled by default; missing query ports leave queries unavailable, without successful fallbacks. Domain/application and shared domain identity remain independent of Spring, HTTP and ORM.
+The [development baseline](docs/deployment-contract.md#development-baseline) records the selected toolchain and dependency policy. The [entry point](src/main/java/org/pipesor/ingestion/IngestionServiceApplication.java) and the `configuration` package ([GitHub](src/main/java/org/pipesor/ingestion/configuration/GitHubConfiguration.java), [capture](src/main/java/org/pipesor/ingestion/configuration/CaptureConfiguration.java), [messaging](src/main/java/org/pipesor/ingestion/configuration/MessagingConfiguration.java), [session](src/main/java/org/pipesor/ingestion/configuration/SessionConfiguration.java), [routes](src/main/java/org/pipesor/ingestion/configuration/WebConfiguration.java)) compose every adapter explicitly; there are no nullable beans or disabled fallbacks. Domain/application and shared domain identity remain independent of Spring, HTTP and ORM.
 
 Metadata commands prepare a connection generation and OAuth attempt, record protected PKCE/version confirmations, consume attempts once, activate with revision guards, record refresh phases and invalidate with durable cleanup intent. [JPA persistence](src/main/java/org/pipesor/ingestion/github/infrastructure/persistence/jpa/JpaConnectionRepository.java) loads the current/target state and nonterminal guards rather than the full history; an infrastructure transaction wraps each complete local command. [V1](src/main/resources/db/migration/V1__github_connection_metadata.sql) owns only the `ingestion` schema and derives from canonical domain 1.2.0 / DD-020. It creates no roles, grants or downstream tables.
 
@@ -508,54 +508,60 @@ same approved authority file, tenant, capture domain and scope revision. Set
 `ingestion.protection.max-input-bytes`. The control prints the locator when the
 profile classifies evidence. It requires neither a webhook nor a vault in this mode.
 
-### Loopback capture on demand
+## Runtime configuration
 
-Local capture uses the operator-owned machine authority and a pinned restricted
-PEM. Set `ingestion.local-capture.enabled=true` and configure its
-`domain`, `tenant`, `app`, `account`, `installation`, `repository`,
-`workflow`, `revision`, `authority-file`, `signing-key-file`,
-`signing-key-sha256`, `api-version`, `run` and `attempt`. Enable capture,
-preparation and protection with their existing limits. Bind the service to
-`127.0.0.1`. The properties file holds references only.
+Names follow the [runtime manifest](https://github.com/pipesor-org/pipesor-docs/blob/main/docs/development/runtime-manifest.md); `pipesor.*` settings bind through Spring relaxed binding (`PIPESOR_GITHUB_APP_ID` → `pipesor.github.app-id`). Typed properties: [platform](src/main/java/org/pipesor/ingestion/shared/security/PlatformSecurityProperties.java), [session](src/main/java/org/pipesor/ingestion/configuration/SessionProperties.java), [GitHub](src/main/java/org/pipesor/ingestion/configuration/GitHubProperties.java), [capture](src/main/java/org/pipesor/ingestion/configuration/CaptureProperties.java), [Service Bus](src/main/java/org/pipesor/ingestion/configuration/ServiceBusProperties.java), [API limits](src/main/java/org/pipesor/ingestion/configuration/ApiProperties.java); bounded defaults live in [application.yml](src/main/resources/application.yml). A missing or contradictory value fails startup; file-based material under `azure` fails startup.
 
-The operator can verify acquisition and durable preparation without a browser:
+| Variable | `local` | `azure` |
+|---|---|---|
+| `SPRING_PROFILES_ACTIVE` | `local` | `azure` |
+| `PIPESOR_TENANT_ID`, `PIPESOR_WORKLOAD_ID=ingestion`, `PIPESOR_SECURITY_AUDIENCE=urn:pipesor:api:ingestion` | required | required |
+| `PIPESOR_SIGNING_KEY_FILE` / `PIPESOR_SIGNING_KEY_ID` | PEM (0600) | Key Vault key `pipesor-ingestion-signing` |
+| `PIPESOR_SESSION_SIGNING_KEY_FILE` / `PIPESOR_SESSION_SIGNING_KEY_ID` | PEM (0600) | Key Vault key `pipesor-session-signing` |
+| `PIPESOR_SECURITY_TRUSTEDWORKLOADS_0_ID=pipeline`, `_JWKSURI`, `_ROLES=Pipeline.MachineScope.Check,Pipeline.GitHubFacts.Read` | loopback HTTP | HTTPS |
+| `PIPESOR_SECURITY_SESSION_JWKSURI` (this service's own JWKS) | `http://127.0.0.1:8081/.well-known/jwks.json` | `https://ingestion.<env-domain>/.well-known/jwks.json` |
+| `PIPESOR_DASHBOARD_ORIGIN` | `http://127.0.0.1:5173` | dashboard origin |
+| `PIPESOR_DATABASE_URL`, `_USERNAME`, `_PASSWORD` | password auth | URL only (Entra token plugin appended) |
+| `PIPESOR_SERVICE_BUS_CONNECTION_STRING` / `PIPESOR_SERVICE_BUS_NAMESPACE`, `PIPESOR_SERVICE_BUS_TOPIC` (default `workflow-evidence`) | emulator connection string | namespace + `DefaultAzureCredential` |
+| `PIPESOR_GITHUB_APP_ID`, `PIPESOR_GITHUB_AUTHORITY_FILE`, `PIPESOR_GITHUB_CAPTURE_DOMAIN` | required | required |
+| `PIPESOR_GITHUB_CALLBACK_URL` | default `http://127.0.0.1:8081/api/v1/auth/github/callback` | `https://ingestion.<env-domain>/api/v1/auth/github/callback` |
+| `PIPESOR_GITHUB_CLIENT_ID` | optional (else `GET /app` with the App JWT) | optional |
+| `PIPESOR_GITHUB_PRIVATE_KEY_FILE`, `PIPESOR_GITHUB_PRIVATE_KEY_SHA256`, `PIPESOR_GITHUB_CLIENT_SECRET_FILE` | operator files (0600) | — |
+| `PIPESOR_GITHUB_KEY_VAULT_URL`, `PIPESOR_GITHUB_PRIVATE_KEY_SECRET_VERSION`, `PIPESOR_GITHUB_CLIENT_SECRET_VERSION` (names default to `github-app-private-key`, `github-app-client-secret`) | — | exact versions |
+| `PIPESOR_GITHUB_CUSTODY_DIRECTORY` / `PIPESOR_GITHUB_CUSTODY_VAULT_URL` | default `~/.config/pipesor-local/custody` (0700/0600) | OAuth custody vault |
+| `PIPESOR_GITHUB_API_BASE_URL`, `PIPESOR_GITHUB_WEB_BASE_URL` | default `https://api.github.com`, `https://github.com` | same |
+| `PIPESOR_GITHUB_WEBHOOK_ENABLED` (+ `PIPESOR_GITHUB_WEBHOOK_SECRET_FILE` or `_SECRET_VERSION`) | default `false` | optional |
 
-```bash
-./mvnw -B -ntp -Dtest=LiveLocalCaptureControlTest \
-  -Dpipesor.live-capture.properties="$HOME/.config/pipesor-local/ingestion-capture.properties" test
-```
+Flyway migrates schema `ingestion` at startup (`ddl-auto: validate`). Actuator exposes only `/actuator/health/liveness` and `/actuator/health/readiness` (readiness includes the database).
 
-The opt-in control uses live GitHub and fresh PostgreSQL, verifies the exact
-historical source locator and repeats the API-based admission to check receipt
-identity. It removes the test database at shutdown.
+## Routes
 
-With the delegated API and the current GitHub user connector configured,
-`GET /api/v1/github/local-analysis` retrieves the configured failed execution.
-The POST for its repository, workflow, run and attempt admits the observation
-read from GitHub's API. Authorization requires a current linked user verified
-as an administrator of that repository, as well as machine capture scope.
-The response reports capture phase. A configured publisher is required to
-deliver the frozen output.
+| Route | Caller |
+|---|---|
+| `GET /actuator/health/liveness`, `GET /actuator/health/readiness`, `GET /.well-known/jwks.json` (workload and session keys) | unauthenticated |
+| `GET /api/v1/auth/github/start?return_to=`, `GET /api/v1/auth/github/callback`, `POST /api/v1/auth/session` | unauthenticated (login flow) |
+| `POST /api/v1/auth/logout`, `/api/v1/github/connection`, `/api/v1/github/repositories`, `…/{repositoryId}/workflows`, `…/workflows/{workflowId}/runs?conclusion=failure`, `POST`/`GET …/runs/{runId}/attempts/{attempt}/analysis` | session token, scope `GitHub.Self` |
+| `POST /internal/v1/github/access-verifications`, `POST /internal/v1/github/workflow-verifications` | `pipeline` workload, `Pipeline.GitHubFacts.Read`, plus `X-Pipesor-Subject-Token` |
+| `POST /internal/v1/capture/machine-scope-checks` | `pipeline` workload, `Pipeline.MachineScope.Check` |
+| `POST /webhooks/v1/github/workflow-runs` | GitHub HMAC (only with `PIPESOR_GITHUB_WEBHOOK_ENABLED=true`) |
+| `GET /v3/api-docs` | `local` profile only |
 
-For the local browser session, run `tools/local-pilot-session.py` with the
-pilot Python environment and keep its output files under `~/.config/pipesor-local`.
-Start Ingestion on loopback with `ingestion-runtime.properties`, which includes
-the public session key and delegated API settings. Run the existing React Vite
-server with `PIPESOR_DEMO_INGESTION_PORT=8083` and open the URL from the
-operator-only `browser-session.url` in the local browser. The session uses a
-separate signing key and a short-lived JWT. React removes the bootstrap fragment
-and keeps the session in the current tab. The delegated API still checks the
-JWT signature, tenant, audience, client, expiry and scope.
+Login: `start` creates a one-time attempt (state digest, PKCE S256 verifier in custody, 10 min) and redirects to GitHub. The `callback` consumes it once, exchanges the code, verifies the GitHub user, an active installation of this App whose account and repository are admitted in the authority file and that the user administers that repository (the checks of the former link script), stores the user token pair in custody through the ADR-020 connection model and redirects to `<dashboard>/auth/complete?handoff=<one-time value>` (60 s) or `?error=<invalid_state|access_denied|not_admitted|unavailable>`. `POST /api/v1/auth/session` returns `{accessToken, expiresAt, user: {githubUserId, login}, returnTo}`; the session lasts at most one hour. The analysis status returns Pipeline's deterministic `executionId`/`incidentId` once published.
 
-With Device Flow enabled for the existing GitHub App, run
-`tools/local-pilot-link.py` and approve the device in GitHub with the pilot
-account. The tool verifies GitHub user identity, exact App installation and
-effective repository administration before making the local link available.
-Ingestion reads that link from `ingestion.local-capture.user-link-file` and
-rechecks GitHub access on each analysis. The local session never carries the App
-user grant or the installation credential.
+## Local login walkthrough
 
-Set `ingestion.local-capture.spool-directory` to an absolute mode-0700 directory
-to deliver the protected envelopes through the existing outbox. Add explicit
-`spring.datasource.*` properties to use a retained PostgreSQL database with the
-live control. Its test still uses temporary storage when no datasource is set.
+1. GitHub App settings (owner action): add the callback URL `http://127.0.0.1:8081/api/v1/auth/github/callback`, keep "Expire user authorization tokens" enabled and generate a client secret. Save the secret as an owner-only file, e.g. `~/.config/pipesor-local/github-client-secret` (mode 0600).
+2. Start the local stack (`pipesor-workspace`), then run Ingestion with the generated env file plus the GitHub settings:
+
+   ```bash
+   set -a; . ~/.config/pipesor-local/env/ingestion.env
+   PIPESOR_GITHUB_APP_ID=<app id> PIPESOR_GITHUB_PRIVATE_KEY_FILE=<pem> PIPESOR_GITHUB_PRIVATE_KEY_SHA256=<sha256>
+   PIPESOR_GITHUB_CLIENT_SECRET_FILE=$HOME/.config/pipesor-local/github-client-secret
+   PIPESOR_GITHUB_AUTHORITY_FILE=$HOME/.config/pipesor-local/authority.json PIPESOR_GITHUB_CAPTURE_DOMAIN=<domain>
+   set +a; ./mvnw -B -ntp spring-boot:run
+   ```
+
+3. Check `curl http://127.0.0.1:8081/actuator/health/readiness` and `curl http://127.0.0.1:8081/.well-known/jwks.json` (two keys).
+4. Open the dashboard at `http://127.0.0.1:5173` and log in; it calls `GET /api/v1/auth/github/start`, GitHub redirects back to the callback, and the dashboard exchanges the handoff at `POST /api/v1/auth/session`. Tokens, codes and handoff values are never logged.
+
+The user's GitHub token is refreshed server-side when it is within five minutes of expiry; logout invalidates the link generation (custody cleanup operations stay pending, as in DD-020).
