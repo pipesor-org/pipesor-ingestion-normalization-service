@@ -11,7 +11,7 @@ class ImageChecks(unittest.TestCase):
             subprocess.CompletedProcess([], 0, '10001:10001\n'),
             subprocess.CompletedProcess([], 0, 'source-sha\n'),
             subprocess.CompletedProcess([], 0, 'https://github.com/pipesor-org/pipesor-ingestion-normalization-service\n'),
-            subprocess.CompletedProcess([], 1, '', 'Failed to bind server.port'),
+            subprocess.CompletedProcess([], 1, 'APPLICATION FAILED TO START\nReason: pipesor.github.app-id is required', ''),
             subprocess.CompletedProcess([], 0),
         ]
 
@@ -35,9 +35,9 @@ class ImageChecks(unittest.TestCase):
                 self.assertEqual(run.call_args_list[-1].args[0][:3], ['docker', 'rm', '--force'])
 
     def test_startup_success_unrelated_failure_and_timeout_are_rejected_and_cleaned(self):
-        for outcome in (subprocess.CompletedProcess([], 0, 'server.port', ''),
+        for outcome in (subprocess.CompletedProcess([], 0, 'APPLICATION FAILED TO START is required', ''),
                         subprocess.CompletedProcess([], 1, 'unrelated failure', ''),
-                        subprocess.CompletedProcess([], 125, 'server.port', ''),
+                        subprocess.CompletedProcess([], 125, 'APPLICATION FAILED TO START is required', ''),
                         subprocess.TimeoutExpired('docker', 60)):
             with self.subTest(outcome=outcome):
                 results = self.results()[:3] + [outcome, subprocess.CompletedProcess([], 0)]
