@@ -31,6 +31,8 @@ public class WebConfiguration {
                         .access(PlatformAuthorities.workload("pipeline", "Pipeline.GitHubFacts.Read"))
                         .requestMatchers(HttpMethod.POST, MACHINE_SCOPE_PATH)
                         .access(PlatformAuthorities.workload("pipeline", "Pipeline.MachineScope.Check"))
+                        .requestMatchers(HttpMethod.PUT, "/internal/v1/capture/workflow-scopes/*/*")
+                        .access(PlatformAuthorities.workload("pipeline", "Pipeline.CaptureScope.Write"))
                         .requestMatchers(HttpMethod.GET, "/v3/api-docs", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/error").permitAll();
             }

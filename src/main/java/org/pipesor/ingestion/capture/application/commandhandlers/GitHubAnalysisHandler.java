@@ -25,6 +25,11 @@ import org.pipesor.ingestion.github.domain.model.valueobjects.RepositoryTarget;
  */
 public final class GitHubAnalysisHandler {
     /** Authorization failure without disclosure of which condition failed. */
+    /** ADR-023: the workflow has no ACTIVE capture scope yet (not registered, paused or not synced). */
+    public static final class AnalysisPending extends RuntimeException {
+        public AnalysisPending() { super("Capture scope pending", null, false, false); }
+    }
+
     public static final class AnalysisDenied extends RuntimeException {
         public AnalysisDenied() { super("Analysis denied", null, false, false); }
     }
@@ -70,7 +75,7 @@ public final class GitHubAnalysisHandler {
     private CaptureScope scope(AccessContext access, Target target) {
         if (!tenant.toString().equals(access.tenantId())) throw new AnalysisDenied();
         return scopes.completedScope(captureDomain, tenant, target.repositoryId(), target.workflowId())
-                .orElseThrow(AnalysisDenied::new);
+                .orElseThrow(AnalysisPending::new);
     }
 
     private void authorize(AccessContext actor, CaptureScope scope, Instant startedAt, Runnable live) {

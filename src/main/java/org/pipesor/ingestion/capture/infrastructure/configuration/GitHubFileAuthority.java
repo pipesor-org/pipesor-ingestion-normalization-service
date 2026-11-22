@@ -17,7 +17,7 @@ import tools.jackson.databind.*;
 import tools.jackson.databind.json.JsonMapper;
 
 /** Operator-owned atomic file snapshots; no last-good authorization cache, admin API or restore proof. */
-public final class GitHubFileAuthority implements org.pipesor.ingestion.capture.application.ports.MachineScopes,CurrentMachineScope,InstallationAdmission,GitHubRepositorySelection,org.pipesor.ingestion.auth.application.ports.HumanAdmissions {
+public final class GitHubFileAuthority implements CaptureAuthority {
     private static final JsonMapper JSON=JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private static final Set<String> ROOT=Set.of("formatVersion","revision","humanAdmissions","machineScopes");
     private static final Set<String> HUMAN=Set.of("tenantId","appId","accountId","installationId","repositoryIds");
@@ -40,6 +40,17 @@ public final class GitHubFileAuthority implements org.pipesor.ingestion.capture.
     private record Snapshot(List<Admission> human,List<Machine> machines) {
         @Override public String toString(){return "AuthoritySnapshot[private]";}
     }
+    /** Reviewed admissions and scopes exported for the ADR-023 operator import. */
+    public record Export(List<ExportedAdmission> admissions, List<ExportedScope> scopes) { }
+    public record ExportedAdmission(UUID tenant, String account, String installation, Set<String> repositories) { }
+    public record ExportedScope(CaptureScope scope, Set<String> actions, Duration replay) { }
+
+    public Export export() {
+        var snapshot = load();
+        return new Export(snapshot.human().stream().map(a -> new ExportedAdmission(a.tenant(), a.account(), a.installation(), a.repositories())).toList(),
+                snapshot.machines().stream().map(m -> new ExportedScope(m.scope(), m.actions(), m.replay())).toList());
+    }
+
     /** Readiness validates a file snapshot; it does not authorize a request or certify restoration. */
     public void validate(){try{load();}catch(RuntimeException unavailable){throw captureUnavailable();}}
     @Override public Decision verify(CaptureScope expected) {

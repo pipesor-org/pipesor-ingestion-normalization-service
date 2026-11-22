@@ -5,7 +5,7 @@ import java.time.Clock;
 import org.pipesor.ingestion.capture.application.commandhandlers.*;
 import org.pipesor.ingestion.capture.application.ports.*;
 import org.pipesor.ingestion.capture.application.services.FailedRunEvidenceProfile;
-import org.pipesor.ingestion.capture.infrastructure.configuration.GitHubFileAuthority;
+import org.pipesor.ingestion.capture.infrastructure.configuration.CaptureAuthority;
 import org.pipesor.ingestion.capture.infrastructure.github.GitHubMachineTransport;
 import org.pipesor.ingestion.capture.infrastructure.messaging.NormalizedOutputEncoder;
 import org.pipesor.ingestion.capture.infrastructure.persistence.jpa.JpaCaptureLedger;
@@ -49,7 +49,7 @@ public class CaptureConfiguration {
         return new NormalizeObservationHandler(protection);
     }
 
-    @Bean CaptureHandler captureHandler(CaptureLedger ledger, GitHubFileAuthority authority, BrokerPublisher publisher, Clock clock) {
+    @Bean CaptureHandler captureHandler(CaptureLedger ledger, CaptureAuthority authority, BrokerPublisher publisher, Clock clock) {
         return new CaptureHandler(ledger, authority, publisher, clock);
     }
 
@@ -68,7 +68,7 @@ public class CaptureConfiguration {
         return new RequestGitHubCapture(capture, github);
     }
 
-    @Bean GitHubAnalysisHandler githubAnalysisHandler(GitHubFileAuthority authority, RequestGitHubCapture capture,
+    @Bean GitHubAnalysisHandler githubAnalysisHandler(CaptureAuthority authority, RequestGitHubCapture capture,
             org.pipesor.ingestion.github.application.services.GitHubQueries github, GitHubProperties properties,
             org.pipesor.ingestion.shared.security.PlatformSecurityProperties platform, Clock clock) {
         return new GitHubAnalysisHandler(authority, capture, github, properties.captureDomain(), platform.tenantId(), clock);

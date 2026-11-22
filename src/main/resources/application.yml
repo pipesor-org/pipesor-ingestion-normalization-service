@@ -108,6 +108,8 @@ pipesor:
       webhook-timeout: 5s
       webhook-max-body-bytes: 1048576
       webhook-max-header-chars: 512
+      # ADR-023: replay window of workflow scopes created by Pipeline's sync.
+      scope-replay-window: 20m
       webhook-max-in-flight: 16
   capture:
     workers-enabled: true

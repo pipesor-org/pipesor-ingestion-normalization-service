@@ -528,7 +528,8 @@ Names follow the [runtime manifest](https://github.com/pipesor-org/pipesor-docs/
 | `PIPESOR_DASHBOARD_ORIGIN` | `http://127.0.0.1:5173` | dashboard origin |
 | `PIPESOR_DATABASE_URL`, `_USERNAME`, `_PASSWORD` | password auth | URL only (Entra token plugin appended) |
 | `PIPESOR_SERVICE_BUS_CONNECTION_STRING` / `PIPESOR_SERVICE_BUS_NAMESPACE`, `PIPESOR_SERVICE_BUS_TOPIC` (default `workflow-evidence`) | emulator connection string | namespace + `DefaultAzureCredential` |
-| `PIPESOR_GITHUB_APP_ID`, `PIPESOR_GITHUB_AUTHORITY_FILE`, `PIPESOR_GITHUB_CAPTURE_DOMAIN` | required | required |
+| `PIPESOR_GITHUB_APP_ID`, `PIPESOR_GITHUB_CAPTURE_DOMAIN` | required | required |
+| `PIPESOR_GITHUB_AUTHORITY_FILE` | only for the admission import command | only for the admission import command |
 | `PIPESOR_GITHUB_CALLBACK_URL` | default `http://127.0.0.1:8081/api/v1/auth/github/callback` | `https://ingestion.<env-domain>/api/v1/auth/github/callback` |
 | `PIPESOR_GITHUB_CLIENT_ID` | optional (else `GET /app` with the App JWT) | optional |
 | `PIPESOR_GITHUB_PRIVATE_KEY_FILE`, `PIPESOR_GITHUB_PRIVATE_KEY_SHA256`, `PIPESOR_GITHUB_CLIENT_SECRET_FILE` | operator files (0600) | — |
@@ -548,10 +549,25 @@ Flyway migrates schema `ingestion` at startup (`ddl-auto: validate`). Actuator e
 | `POST /api/v1/auth/logout`, `/api/v1/github/connection`, `/api/v1/github/repositories`, `…/{repositoryId}/workflows`, `…/workflows/{workflowId}/runs?conclusion=failure`, `POST`/`GET …/runs/{runId}/attempts/{attempt}/analysis` | session token, scope `GitHub.Self` |
 | `POST /internal/v1/github/access-verifications`, `POST /internal/v1/github/workflow-verifications` | `pipeline` workload, `Pipeline.GitHubFacts.Read`, plus `X-Pipesor-Subject-Token` |
 | `POST /internal/v1/capture/machine-scope-checks` | `pipeline` workload, `Pipeline.MachineScope.Check` |
+| `PUT /internal/v1/capture/workflow-scopes/{repositoryId}/{workflowId}` | `pipeline` workload, `Pipeline.CaptureScope.Write` (ADR-023) |
 | `POST /webhooks/v1/github/workflow-runs` | GitHub HMAC (only with `PIPESOR_GITHUB_WEBHOOK_ENABLED=true`) |
 | `GET /v3/api-docs` | `local` profile only |
 
-Login: `start` creates a one-time attempt (state digest, PKCE S256 verifier in custody, 10 min) and redirects to GitHub. The `callback` consumes it once, exchanges the code, verifies the GitHub user, an active installation of this App whose account and repository are admitted in the authority file and that the user administers that repository (the checks of the former link script), stores the user token pair in custody through the ADR-020 connection model and redirects to `<dashboard>/auth/complete?handoff=<one-time value>` (60 s) or `?error=<invalid_state|access_denied|not_admitted|unavailable>`. `POST /api/v1/auth/session` returns `{accessToken, expiresAt, user: {githubUserId, login}, returnTo}`; the session lasts at most one hour. The analysis status returns Pipeline's deterministic `executionId`/`incidentId` once published.
+Capture authority (ADR-023): admissions and workflow scopes live in `ingestion.repository_admissions` and
+`ingestion.capture_workflow_scopes`; the authority file is not read at runtime. Pipeline sets each registered
+workflow's status (`ACTIVE`/`PAUSED`) through the workflow-scopes route; a status change increments the scope
+revision and revokes the previous one. The analysis request answers `409 CAPTURE_SCOPE_PENDING` while a workflow has
+no active scope. Admissions are an operator act, imported from a reviewed authority file with:
+
+```bash
+java -jar target/pipesor-ingestion-normalization-service-*.jar --spring.main.web-application-type=none \
+  --pipesor.admin.import-authority=$HOME/.config/pipesor-local/authority.json
+```
+
+The import is an idempotent upsert; existing machine scopes keep their reviewed scope revision so evidence captured
+earlier stays verifiable.
+
+Login: `start` creates a one-time attempt (state digest, PKCE S256 verifier in custody, 10 min) and redirects to GitHub. The `callback` consumes it once, exchanges the code, verifies the GitHub user, an active installation of this App whose account and repository are admitted (`ingestion.repository_admissions`) and that the user administers that repository (the checks of the former link script), stores the user token pair in custody through the ADR-020 connection model and redirects to `<dashboard>/auth/complete?handoff=<one-time value>` (60 s) or `?error=<invalid_state|access_denied|not_admitted|unavailable>`. `POST /api/v1/auth/session` returns `{accessToken, expiresAt, user: {githubUserId, login}, returnTo}`; the session lasts at most one hour. The analysis status returns Pipeline's deterministic `executionId`/`incidentId` once published.
 
 ## Local login walkthrough
 
