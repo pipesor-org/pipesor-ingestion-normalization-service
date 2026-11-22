@@ -6,7 +6,6 @@ import com.azure.security.keyvault.secrets.models.SecretProperties;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -32,7 +31,7 @@ class KeyVaultCredentialCustodyTests {
 
     private KeyVaultCredentialCustody configured() {
         when(sdk.getVaultUrl()).thenReturn(VAULT.toString());
-        return new KeyVaultCredentialCustody(sdk, VAULT, Map.of(GENERATION, "opaque-credential-object", ATTEMPT, "opaque-attempt-object"), 24000);
+        return new KeyVaultCredentialCustody(sdk, VAULT, 24000);
     }
     private Pair pair() { return new Pair("ghu_syntheticAccess", "ghr_syntheticRefresh", ACCESS_EXPIRY, REFRESH_EXPIRY); }
     private SavedVersion pairVersion() { return new SavedVersion(GENERATION, new SecretReference(VERSION)); }
@@ -64,14 +63,14 @@ class KeyVaultCredentialCustodyTests {
 
     @Test
     void constructsTheRealManagedIdentitySdkWithoutContactingTheVault() {
-        var client = KeyVaultCredentialCustody.managedIdentityClient(VAULT, Duration.ofSeconds(2));
+        var client = KeyVaultCredentialCustody.secretClient(VAULT, Duration.ofSeconds(2), () -> new com.azure.identity.DefaultAzureCredentialBuilder().build());
         assertEquals(VAULT.toString(), client.getVaultUrl());
     }
 
     @Test void writesOneAtomicPairAndReadsOnlyTheConfirmedExactVersionWithoutRenewingIt() {
         when(sdk.setSecret(any(KeyVaultSecret.class))).thenAnswer(invocation -> {
             var request = invocation.getArgument(0, KeyVaultSecret.class);
-            assertEquals("opaque-credential-object", request.getName());
+            assertEquals("github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161", request.getName());
             assertTrue(request.getValue().contains("ghu_syntheticAccess"));
             assertTrue(request.getValue().contains("ghr_syntheticRefresh"));
             assertTrue(request.getValue().contains(ACCESS_EXPIRY.toString()));
@@ -80,17 +79,17 @@ class KeyVaultCredentialCustodyTests {
         });
         var saved = custody.savePair(GENERATION, pair());
         assertEquals(pairVersion(), saved);
-        when(sdk.getSecret("opaque-credential-object", VERSION)).thenAnswer(ignored -> response("opaque-credential-object", VERSION, pairBody()));
+        when(sdk.getSecret("github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161", VERSION)).thenAnswer(ignored -> response("github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161", VERSION, pairBody()));
         assertEquals(pair(), custody.readPair(saved));
         assertEquals(pair(), custody.readPair(saved));
         verify(sdk, times(1)).setSecret(any(KeyVaultSecret.class));
-        verify(sdk, times(2)).getSecret("opaque-credential-object", VERSION);
+        verify(sdk, times(2)).getSecret("github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161", VERSION);
         verify(sdk, never()).getSecret(anyString());
         assertEquals("KeyVaultCredentialCustody[configured]", custody.toString());
     }
 
     @Test void keepsExpiredAccessAndProviderNanosecondsForTheTrustedRefreshCaller() {
-        when(sdk.getSecret("opaque-credential-object", VERSION)).thenAnswer(ignored -> response("opaque-credential-object", VERSION, pairBody()));
+        when(sdk.getSecret("github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161", VERSION)).thenAnswer(ignored -> response("github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161", VERSION, pairBody()));
         var restored = custody.readPair(pairVersion());
         assertEquals(ACCESS_EXPIRY, restored.accessExpiresAt());
         assertEquals(REFRESH_EXPIRY, restored.refreshExpiresAt());
@@ -105,7 +104,7 @@ class KeyVaultCredentialCustodyTests {
         assertEquals(ATTEMPT, saved.object());
         var argument = org.mockito.ArgumentCaptor.forClass(KeyVaultSecret.class);
         verify(sdk).setSecret(argument.capture());
-        when(sdk.getSecret("opaque-attempt-object", VERSION)).thenAnswer(ignored -> response("opaque-attempt-object", VERSION, argument.getValue().getValue()));
+        when(sdk.getSecret("github-pkce-e2345352-65da-4915-a831-e78b1e4b0b17", VERSION)).thenAnswer(ignored -> response("github-pkce-e2345352-65da-4915-a831-e78b1e4b0b17", VERSION, argument.getValue().getValue()));
         assertEquals(VERIFIER, custody.readVerifier(saved));
         expect(Failure.Reason.INVALID_INPUT, () -> custody.readPair(saved));
         expect(Failure.Reason.INVALID_INPUT, () -> custody.saveVerifier(GENERATION, VERIFIER));
@@ -115,19 +114,19 @@ class KeyVaultCredentialCustodyTests {
     @ParameterizedTest
     @ValueSource(strings = {"vault", "name", "version", "propertiesName", "relativeId", "query", "encodedPath", "latest"})
     void rejectsForeignOrIncompatibleSdkIdentityBeforeReturningMaterial(String corruption) {
-        var result = response("opaque-credential-object", VERSION, pairBody());
+        var result = response("github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161", VERSION, pairBody());
         var properties = result.getProperties();
         switch (corruption) {
-            case "vault" -> when(properties.getId()).thenReturn("https://other.vault.azure.net/secrets/opaque-credential-object/" + VERSION);
+            case "vault" -> when(properties.getId()).thenReturn("https://other.vault.azure.net/secrets/github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161/" + VERSION);
             case "name" -> when(result.getName()).thenReturn("other-object");
             case "version" -> when(properties.getVersion()).thenReturn("differentVersion");
             case "propertiesName" -> when(properties.getName()).thenReturn("other-object");
-            case "relativeId" -> when(properties.getId()).thenReturn("/secrets/opaque-credential-object/" + VERSION);
-            case "query" -> when(properties.getId()).thenReturn(VAULT + "/secrets/opaque-credential-object/" + VERSION + "?other=1");
-            case "encodedPath" -> when(properties.getId()).thenReturn(VAULT + "/secrets/opaque%2Dcredential-object/" + VERSION);
+            case "relativeId" -> when(properties.getId()).thenReturn("/secrets/github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161/" + VERSION);
+            case "query" -> when(properties.getId()).thenReturn(VAULT + "/secrets/github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161/" + VERSION + "?other=1");
+            case "encodedPath" -> when(properties.getId()).thenReturn(VAULT + "/secrets/github%2Dgeneration-3ac49904-cc7d-4f78-b27c-174f6725f161/" + VERSION);
             case "latest" -> when(properties.getVersion()).thenReturn("latest");
         }
-        when(sdk.getSecret("opaque-credential-object", VERSION)).thenReturn(result);
+        when(sdk.getSecret("github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161", VERSION)).thenReturn(result);
         expect(Failure.Reason.UNAVAILABLE, () -> custody.readPair(pairVersion()));
     }
 
@@ -147,12 +146,12 @@ class KeyVaultCredentialCustodyTests {
             case "trailing" -> pairBody() + " {}";
             default -> throw new IllegalArgumentException();
         };
-        when(sdk.getSecret("opaque-credential-object", VERSION)).thenAnswer(ignored -> response("opaque-credential-object", VERSION, raw));
+        when(sdk.getSecret("github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161", VERSION)).thenAnswer(ignored -> response("github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161", VERSION, raw));
         expect(Failure.Reason.UNAVAILABLE, () -> custody.readPair(pairVersion()));
     }
 
     @Test void rejectsUnapprovedObjectsPathVersionsAndInvalidPkceBeforeSdkIo() {
-        expect(Failure.Reason.INVALID_INPUT, () -> custody.savePair(SecretReference.generationObject(UUID.randomUUID()), pair()));
+        expect(Failure.Reason.INVALID_INPUT, () -> custody.savePair(new SecretReference("generation:../escape"), pair()));
         expect(Failure.Reason.INVALID_INPUT, () -> custody.readPair(new SavedVersion(GENERATION, new SecretReference("../version"))));
         expect(Failure.Reason.INVALID_INPUT, () -> custody.saveVerifier(ATTEMPT, "too-short"));
         expect(Failure.Reason.INVALID_INPUT, () -> custody.saveVerifier(ATTEMPT, "x".repeat(129)));
@@ -165,14 +164,14 @@ class KeyVaultCredentialCustodyTests {
         when(sdk.setSecret(any(KeyVaultSecret.class))).thenThrow(new IllegalStateException("synthetic-token private-vault-name " + VERSION));
         expect(Failure.Reason.UNAVAILABLE, () -> custody.savePair(GENERATION, pair()));
         verify(sdk, times(1)).setSecret(any(KeyVaultSecret.class));
-        when(sdk.getSecret("opaque-credential-object", VERSION)).thenThrow(new IllegalStateException("synthetic-token"));
+        when(sdk.getSecret("github-generation-3ac49904-cc7d-4f78-b27c-174f6725f161", VERSION)).thenThrow(new IllegalStateException("synthetic-token"));
         expect(Failure.Reason.UNAVAILABLE, () -> custody.readPair(pairVersion()));
     }
 
     @Test void rejectsWrongWriteReceiptAndOversizedPayload() {
         when(sdk.setSecret(any(KeyVaultSecret.class))).thenAnswer(ignored -> response("other-object", VERSION, pairBody()));
         expect(Failure.Reason.UNAVAILABLE, () -> custody.savePair(GENERATION, pair()));
-        var small = new KeyVaultCredentialCustody(sdk, VAULT, Map.of(GENERATION, "opaque-credential-object"), 1);
+        var small = new KeyVaultCredentialCustody(sdk, VAULT, 1);
         expect(Failure.Reason.INVALID_INPUT, () -> small.savePair(GENERATION, pair()));
         verify(sdk, times(1)).setSecret(any(KeyVaultSecret.class));
     }
@@ -187,13 +186,13 @@ class KeyVaultCredentialCustodyTests {
         verify(sdk, never()).getSecret(anyString(), anyString());
     }
 
-    @Test void configurationRejectsVaultAndObjectAliasingWithoutLeakingReferences() {
-        assertThrowsExactly(IllegalArgumentException.class, () -> new KeyVaultCredentialCustody(sdk, URI.create("https://other.vault.azure.net"), Map.of(), 2000));
-        assertThrowsExactly(IllegalArgumentException.class, () -> new KeyVaultCredentialCustody(sdk, VAULT, Map.of(GENERATION, "same", ATTEMPT, "SAME"), 2000));
-        assertThrowsExactly(IllegalArgumentException.class, () -> new KeyVaultCredentialCustody(sdk, VAULT, Map.of(new SecretReference("generation:not-a-uuid"), "safe"), 2000));
-        assertThrowsExactly(IllegalArgumentException.class, () -> new KeyVaultCredentialCustody(sdk, VAULT, Map.of(GENERATION, "unsafe/path"), 2000));
-        assertThrowsExactly(IllegalArgumentException.class, () -> new KeyVaultCredentialCustody(sdk, VAULT, Map.of(), 25001));
-        assertThrowsExactly(IllegalArgumentException.class, () -> KeyVaultCredentialCustody.managedIdentityClient(VAULT, Duration.ZERO));
-        assertThrowsExactly(IllegalArgumentException.class, () -> KeyVaultCredentialCustody.managedIdentityClient(URI.create("https://vault.example.invalid/path"), Duration.ofSeconds(2)));
+    @Test void configurationRejectsForeignVaultsAndBudgetsWithoutLeakingReferences() {
+        assertThrowsExactly(IllegalArgumentException.class, () -> new KeyVaultCredentialCustody(sdk, URI.create("https://other.vault.azure.net"), 2000));
+        assertThrowsExactly(IllegalArgumentException.class, () -> new KeyVaultCredentialCustody(sdk, VAULT, 25001));
+        expect(Failure.Reason.INVALID_INPUT, () -> custody.savePair(new SecretReference("generation:not-a-uuid"), pair()));
+        expect(Failure.Reason.INVALID_INPUT, () -> custody.savePair(ATTEMPT, pair()));
+        java.util.function.Supplier<com.azure.core.credential.TokenCredential> credential = () -> new com.azure.identity.DefaultAzureCredentialBuilder().build();
+        assertThrowsExactly(IllegalArgumentException.class, () -> KeyVaultCredentialCustody.secretClient(VAULT, Duration.ZERO, credential));
+        assertThrowsExactly(IllegalArgumentException.class, () -> KeyVaultCredentialCustody.secretClient(URI.create("https://vault.example.invalid/path"), Duration.ofSeconds(2), credential));
     }
 }

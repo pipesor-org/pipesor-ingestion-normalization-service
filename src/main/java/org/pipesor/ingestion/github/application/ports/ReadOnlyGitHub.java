@@ -16,8 +16,16 @@ public interface ReadOnlyGitHub {
     Observation<Identity, List<RepositoryFacts>> repositories(Identity request);
     Observation<RepositoryRequest, List<WorkflowMetadata>> workflows(RepositoryRequest request);
     Observation<WorkflowRequest, WorkflowMetadata> workflow(WorkflowRequest request);
+    /** One bounded page of the workflow's failed runs, read with the user's token. */
+    Observation<RunsRequest, RunPage> failedRuns(RunsRequest request);
 
     record Identity(AccessContext context, GitHubLink link) {}
     record RepositoryRequest(Identity identity, RepositoryTarget repository) {}
     record WorkflowRequest(RepositoryRequest repository, String workflowId) {}
+    record RunsRequest(WorkflowRequest workflow, int page, int pageSize) {}
+    record WorkflowRun(String runId, int attempt, String conclusion, String headBranch, String headSha,
+                       java.time.Instant createdAt, java.net.URI htmlUrl) {}
+    record RunPage(List<WorkflowRun> runs, boolean more) {
+        public RunPage { runs = List.copyOf(runs); }
+    }
 }

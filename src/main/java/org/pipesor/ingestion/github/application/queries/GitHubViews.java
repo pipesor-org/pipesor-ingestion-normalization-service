@@ -27,5 +27,9 @@ public final class GitHubViews {
                             List<WorkflowMetadata> workflows) {
         public Workflows { workflows = List.copyOf(workflows); }
     }
+    public record Runs(AccessContext context, GitHubLink link, Instant observedAt, Repository repository,
+                       List<org.pipesor.ingestion.github.application.ports.ReadOnlyGitHub.WorkflowRun> runs, boolean more) {
+        public Runs { runs = List.copyOf(runs); }
+    }
     public record Selection(Access access, Repository repository, WorkflowMetadata workflow) {}
 }

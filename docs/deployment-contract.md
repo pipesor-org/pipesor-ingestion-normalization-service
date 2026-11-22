@@ -462,20 +462,16 @@ Verification on 2026-11-09: the README full build passed 149 tests without failu
 
 ## Local adapter configuration
 
-The current local increment implements the approved read-only HTTP discovery/verification boundary and metadata status/disconnection, an opt-in bounded protector and synchronous Service Bus SDK publisher. It does not activate OAuth start/callback, installation-token capture, a scheduler, external custody or admission. The current-link/provider/admission/repository-selection ports must be supplied before GitHub facts can succeed; otherwise the HTTP adapter returns a fixed 503, never a successful empty collection. Discovery requires an explicit bounded `limit`; continuation cursors are rejected until a complete pagination adapter exists, and oversized results fail unavailable rather than silently truncate.
+### Platform runtime (ADR-022) — 2026-11-22
 
-Required inputs for the servlet application (actual environment values are pending):
+Superseding the previous `ingestion.*` handoff: the service runs one image with profiles `local` and `azure`, inputs named by the [runtime manifest](https://github.com/pipesor-org/pipesor-docs/blob/main/docs/development/runtime-manifest.md), and the [platform identity contract v1](https://github.com/pipesor-org/pipesor-docs/blob/main/docs/architecture/contracts/platform-identity-v1.md). The configuration table, route catalog and local login steps are in the [README](../README.md#runtime-configuration). Summary of behavior:
 
-| Configuration | Required values and behavior |
-|---|---|
-| Listener | `INGESTION_HTTP_PORT` required; `INGESTION_HTTP_ADDRESS` defaults to loopback for local execution. The container binds to all interfaces; this does not approve external ingress. |
-| Database | Spring datasource URL/username/password or an approved datasource supplier; existing JPA validation remains mandatory. Flyway automatic execution stays disabled; apply migrations through the agreed environment procedure before starting. |
-| `ingestion.api.security` | HTTPS `issuer`, `jwk-set-uri`; UUID `tenant`; `audience`; `token-version` (`1.0` or `2.0`); `self-scope`, `internal-scope`; nonempty distinct UUID sets `self-callers`, `pipeline-callers`; nonnegative `clock-skew` duration. No audience, registration or permission is created by these settings. Signature verification is through the configured JWKS; delegated scope, issuer, audience, tenant, actor and caller must all validate. Version 2 uses `azp`, version 1 uses `appid`; incompatible identities fail closed. |
-| `ingestion.api.limits` | Positive `request-timeout` duration, `max-batch-size`, `max-page-size`, `max-request-bytes`, `max-response-bytes`, `max-context-length`. Numeric budgets require environment handoff. The server clamps a request deadline to its own budget and JWT expiry; provider ports must enforce their own I/O timeouts. |
-| `springdoc.api-docs.enabled` | False by default. If explicitly enabled, generated `/v3/api-docs` requires the Pipeline caller/scope; UI is absent. No public documentation route is enabled. |
-| `ingestion.protection` | `enabled=false` default. Enabling requires `version`, positive `max-input-bytes` (aggregate UTF-8), `max-output-chars` (aggregate UTF-16 units), `max-redactions`. Missing/invalid settings fail startup. No normalization handler exists without a real protection port. |
-| `ingestion.messaging` | `enabled=false` default. Enabling requires `namespace` (Service Bus FQDN), `topic`, positive `try-timeout-millis`, `retry-delay-millis`, `retry-max-delay-millis` (at least initial delay), nonnegative `max-retries`, positive `max-message-bytes`. The SDK uses managed identity, not a connection string; target, identity/grants and numeric settings remain operator inputs. |
-| `ingestion.capture.enabled` | False by default. Enabling requires current machine-scope and broker ports. It composes phase operations over the durable ledger; it does not start a worker or authorize a GitHub read. |
+- Inbound tokens are verified by one platform decoder (issuer-selected JWKS, RS256, tenant, audience, lifetime, `scp`/`roles` rules). Entra-specific validators, the loopback self-signed issuer and the local file link were removed.
+- Ingestion issues session tokens (§3) after the GitHub login (§5) and publishes its workload key and the session key at `/.well-known/jwks.json`.
+- The callback stores the GitHub user token pair through the DD-020 connection model (attempt with state digest and PKCE, generation, exact custody versions): operator files (0700/0600) under `local`, the OAuth custody vault under `azure`. Key Vault custody now derives secret names from the owner reference (`github-generation-<uuid>`, `github-pkce-<uuid>`) instead of a static approved map; this needs Key Vault Secrets Officer on the custody vault (runtime manifest).
+- Capture requests record durable intent only; preparation and publication workers always run and publish to Service Bus (emulator connection string under `local`, namespace with `DefaultAzureCredential` under `azure`). The local file spool and the inline publish loop were removed.
+- Flyway migrates schema `ingestion` at startup; JPA validates. V3 adds `ingestion.github_login_attempts` (state and handoff digests only).
+- Errors are `application/problem+json`; unexpected failures are logged with exception class and correlation id only.
 
 The stateless API accepts identity only from a valid Bearer JWT. Ambient cookies do not establish identity or override it. Unknown routes are denied, including framework logout and OAuth resource-metadata defaults. Errors and budgets expose fixed problem codes without provider bodies or private causes; responses are not cached. Internal subject/tenant/operation/resource bindings are validated separately from authentication. Pipeline still owns capabilities, registration and grants.
 
@@ -624,7 +620,38 @@ The conditional generated OpenAPI includes the vendor path and its computed HMAC
 
 Verification on 2026-11-10: README `clean verify` passed 515 tests with zero failures/errors/skips. The final build's Java/resource/pom fingerprints match the current source. Tests include real PostgreSQL webhook acceptance, duplicate/conflicting delivery and concurrency checks; real local HTTP/HMAC/JWT/OpenAPI and deadline/capacity checks; filesystem authority and RSA signing; and simulated Key Vault/CDN boundaries. Sixty core sources compiled with an empty dependency classpath and `jdeps` reported only `java.base`. The packaged JAR excludes test fixtures/libraries; independent review closed the findings. GitHub App, Azure resources and an installation do not exist for this pilot, so no live end-to-end result is claimed. CI was explicitly deferred and was not executed, diagnosed or modified.
 
-## Verify preparation profile v1 — approved locally
+## Failed-run evidence profile v1 (protected evidence 2.2)
+
+`FailedRunEvidenceProfile` (`failed-run-evidence-v1`) replaces the closed Verify
+profile below for every registered repository and workflow. It follows
+[protected evidence 2.2](https://github.com/pipesor-org/pipesor-docs/blob/main/docs/architecture/contracts/protected-evidence-v2.2.md):
+
+- Successful, cancelled, skipped and neutral completed runs produce a snapshot with
+  coarse stages from step metadata and no evidence. Logs are not required.
+- For `failure`/`timed_out`, the first failed job (earliest completion, then id) and
+  its first failed step are selected. The step's own archive member
+  (`<job>/<n>_<step>.txt`) is used when GitHub provides it; otherwise the transport
+  attributes the job's root aggregate member (`N_<job>.txt`) and only the lines
+  inside the failed step's time window are considered.
+- The excerpt is one contiguous range of at most 40 lines ending at the last
+  specific error line (GitHub `##[error]`, Maven `[ERROR]`, npm/yarn, compiler,
+  pytest, Docker build, generic `Error:`/`FAILED` patterns); the generic
+  "Process completed with exit code" line is used only when nothing more specific
+  exists. The range is shortened from its start to fit the protection input limit.
+- The locator percent-encodes the member and binds the 1-based line range and the
+  SHA-256 of the exact original bytes. The evidence message is schema `2.2`.
+- The stage is a coarse classification of the failed step name and excerpt
+  (infrastructure/setup, container, deployment, quality gate, testing, else build).
+  The failure summary is a fixed stage phrase; step names and log text never appear
+  in summaries.
+- A failed run without the failed step's member or an attributable aggregate member
+  stays unsupported and freezes no plan.
+
+The profile is a deterministic selection of evidence, not a diagnosis. Its
+heuristics may pick a symptom instead of the cause; the diagnosis and human review
+downstream remain responsible for interpretation.
+
+## Verify preparation profile v1 — superseded by failed-run evidence v1
 
 **Legacy source profile:** CI was renamed to `.github/workflows/ci.yml` (`CI`) on
 2026-11-11, reordered contribution checks ahead of Maven and added a separate

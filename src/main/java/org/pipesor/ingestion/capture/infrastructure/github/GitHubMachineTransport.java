@@ -41,19 +41,13 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
         public AppJwt { CaptureScope.external(appId);org.pipesor.ingestion.github.application.ports.GitHubUserTokens.token(token);Objects.requireNonNull(expiresAt); }
         @Override public String toString(){return "AppJwt[private]";}
     }
-    public GitHubMachineTransport(CurrentMachineScope authority,Supplier<AppJwt> jwt,String appId,String version,Duration budget,
-            int pageSize,int maxPages,int maxJobs,int maxBytes,int maxLogBytes,Set<String> downloadHosts,Clock clock) {
-        this(HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).connectTimeout(budget).build(),URI.create("https://api.github.com"),authority,jwt,appId,version,budget,pageSize,maxPages,maxJobs,maxBytes,maxLogBytes,null,downloadHosts,clock);
-    }
-    public GitHubMachineTransport(CurrentMachineScope authority,Supplier<AppJwt> jwt,String appId,String version,Duration budget,
-            int pageSize,int maxPages,int maxJobs,int maxBytes,int maxLogBytes,ArchiveLimits archiveLimits,Set<String> downloadHosts,Clock clock) {
-        this(HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).connectTimeout(budget).build(),URI.create("https://api.github.com"),authority,jwt,appId,version,budget,pageSize,maxPages,maxJobs,maxBytes,maxLogBytes,archiveLimits,downloadHosts,clock);
-    }
-    GitHubMachineTransport(HttpClient client,URI origin,CurrentMachineScope authority,Supplier<AppJwt> jwt,String appId,String version,Duration budget,
+    /** The API origin is validated by the caller's transport policy (configurable GitHub API base URL). */
+    public GitHubMachineTransport(HttpClient client,URI origin,CurrentMachineScope authority,Supplier<AppJwt> jwt,String appId,String version,Duration budget,
             int pageSize,int maxPages,int maxJobs,int maxBytes,int maxLogBytes,Set<String> downloadHosts,Clock clock) {
         this(client,origin,authority,jwt,appId,version,budget,pageSize,maxPages,maxJobs,maxBytes,maxLogBytes,null,downloadHosts,clock);
     }
-    GitHubMachineTransport(HttpClient client,URI origin,CurrentMachineScope authority,Supplier<AppJwt> jwt,String appId,String version,Duration budget,
+    /** The API origin is validated by the caller's transport policy (configurable GitHub API base URL). */
+    public GitHubMachineTransport(HttpClient client,URI origin,CurrentMachineScope authority,Supplier<AppJwt> jwt,String appId,String version,Duration budget,
             int pageSize,int maxPages,int maxJobs,int maxBytes,int maxLogBytes,ArchiveLimits archiveLimits,Set<String> downloadHosts,Clock clock) {
         this.client=Objects.requireNonNull(client);this.origin=Objects.requireNonNull(origin);this.authority=Objects.requireNonNull(authority);this.jwt=Objects.requireNonNull(jwt);
         this.appId=CaptureScope.external(appId);this.version=Objects.requireNonNull(version);this.budget=Objects.requireNonNull(budget);this.clock=Objects.requireNonNull(clock);
@@ -146,12 +140,12 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
     }
     private StepLogs stepLogs(Run run,byte[] archive,Session session){
         var expected=new HashMap<String,StepLog>();var jobs=new HashSet<String>();
-        String verifyJob = null;
+        var bindable = new HashMap<String,String>();
         var systemLogs = new HashSet<String>();
         for(var job:run.jobs()){
             String directory = archiveJobDirectory(job.name());
             if (!jobs.add(directory)) throw new CaptureFailure(UNAVAILABLE);
-            if ("verify".equals(job.name())) { verifyJob = job.id(); }
+            if (directory.equals(job.name())) { bindable.put(directory, job.id()); }
             systemLogs.add(directory + "/system.txt");
             // A rewritten job label identifies ancillary files only. It cannot bind an evidence member.
             if (!directory.equals(job.name())) continue;
@@ -167,10 +161,17 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
             }
         }
         var central = centralNames(archive, session);
-        // A proven failed step keeps the original profile and its original archive budgets.
-        boolean aggregateNeeded = verifyJob != null && ("failure".equals(run.conclusion()) || "timed_out".equals(run.conclusion())) && run.jobs().stream().filter(job -> "verify".equals(job.name()))
-                .flatMap(job -> job.steps().stream()).filter(step -> "failure".equals(step.conclusion()) || "timed_out".equals(step.conclusion()))
-                .noneMatch(step -> central.contains("verify/" + step.number() + "_" + step.name() + ".txt"));
+        // A failed job whose failed step has no member of its own is attributed through its root aggregate member.
+        var aggregateJobs = new HashMap<String,String>();
+        if ("failure".equals(run.conclusion()) || "timed_out".equals(run.conclusion())) {
+            for (var job : run.jobs()) {
+                if (!("failure".equals(job.conclusion()) || "timed_out".equals(job.conclusion())) || !bindable.containsKey(job.name())) continue;
+                var failedSteps = job.steps().stream().filter(step -> "failure".equals(step.conclusion()) || "timed_out".equals(step.conclusion())).toList();
+                if (failedSteps.isEmpty() || failedSteps.stream().anyMatch(step -> !central.contains(job.name() + "/" + step.number() + "_" + step.name() + ".txt"))) {
+                    aggregateJobs.put(job.name(), job.id());
+                }
+            }
+        }
         var seen = new HashSet<String>();
         var result = new ArrayList<StepLog>();
         var aggregates = new ArrayList<AggregateLog>();
@@ -182,7 +183,8 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
                 var selected=expected.get(name);boolean folder=entry.isDirectory()&&jobs.contains(name.substring(0,name.length()-1));
                 boolean aggregate=jobs.stream().anyMatch(job->name.matches("[0-9]+_"+java.util.regex.Pattern.quote(job)+"\\.txt"));
                 if(selected==null&&!folder&&!aggregate&&!systemLogs.contains(name))throw new CaptureFailure(UNAVAILABLE);
-                boolean attributable = aggregateNeeded && name.matches("[0-9]{1,9}_verify\\.txt");
+                String aggregateJob = name.matches("[0-9]{1,9}_[^/]+\\.txt") ? aggregateJobs.get(name.substring(name.indexOf('_') + 1, name.length() - 4)) : null;
+                boolean attributable = aggregateJob != null;
                 var bytes=new ByteArrayOutputStream();var buffer=new byte[8192];int read;
                 while((read=zip.read(buffer))!=-1){
                     session.check();if(read>archiveLimits.maxExpandedBytes()-expanded||folder&&read>0||(selected!=null||attributable)&&read>archiveLimits.maxStepBytes()-bytes.size())throw new CaptureFailure(UNAVAILABLE);
@@ -190,10 +192,10 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
                 }
                 if(selected!=null){var content=bytes.toByteArray();strictUtf8(content);result.add(new StepLog(selected.jobId(),selected.stepNumber(),content));}
                 if (attributable) {
-                    if (!aggregates.isEmpty()) throw new CaptureFailure(UNAVAILABLE);
+                    if (aggregates.stream().anyMatch(existing -> existing.jobId().equals(aggregateJob))) throw new CaptureFailure(UNAVAILABLE);
                     var content = bytes.toByteArray();
                     strictUtf8(content);
-                    aggregates.add(new AggregateLog(verifyJob, name, content));
+                    aggregates.add(new AggregateLog(aggregateJob, name, content));
                 }
                 zip.closeEntry();
             }

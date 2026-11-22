@@ -21,7 +21,9 @@ def check_image(image, revision):
                 raise RuntimeError('Packaged image user or source identity does not match')
         result = subprocess.run(['docker', 'run', '--rm', '--name', name, '--network', 'none', image],
                                 capture_output=True, text=True, timeout=60)
-        if result.returncode != 1 or 'server.port' not in result.stdout + result.stderr:
+        output = result.stdout + result.stderr
+        # Without platform settings the service must refuse to start on a required pipesor.* value.
+        if result.returncode != 1 or 'APPLICATION FAILED TO START' not in output or 'is required' not in output:
             raise RuntimeError('Packaged service did not reject missing runtime configuration as expected')
         print('Image checks passed: nonroot, OCI source/revision, missing-configuration rejection')
     finally:

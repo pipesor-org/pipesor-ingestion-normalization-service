@@ -66,7 +66,7 @@ class GitHubOAuthUserTokensTests {
     private GitHubOAuthUserTokens adapter(int bytes, Duration timeout) {
         return new GitHubOAuthUserTokens(HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build(), endpoint,
                 () -> new GitHubOAuthUserTokens.ClientCredentials("app-client", "private&+client"),
-                URI.create("https://ingestion.pipesor.example/callback"), timeout, bytes, clock);
+                URI.create("https://ingestion.pipesor.example/callback"), timeout, bytes, clock, org.pipesor.ingestion.shared.security.TransportPolicy.forProfiles("local"));
     }
     private GitHubOAuthUserTokens adapter() { return adapter(4096, Duration.ofSeconds(3)); }
 
@@ -161,6 +161,18 @@ class GitHubOAuthUserTokensTests {
         try { failure(INVALID_INPUT, () -> adapter().refresh("private-refresh")); }
         finally { TransactionSynchronizationManager.setActualTransactionActive(false); }
         assertEquals(0, requests.get());
+    }
+
+    @Test void transportPolicyAllowsLoopbackHttpOnlyUnderLocal() {
+        var client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
+        java.util.function.Supplier<GitHubOAuthUserTokens.ClientCredentials> app = () -> new GitHubOAuthUserTokens.ClientCredentials("a", "b");
+        var local = org.pipesor.ingestion.shared.security.TransportPolicy.forProfiles("local");
+        var azure = org.pipesor.ingestion.shared.security.TransportPolicy.forProfiles("azure");
+        var loopback = URI.create("http://127.0.0.1:8081/api/v1/auth/github/callback");
+        assertNotNull(new GitHubOAuthUserTokens(client, endpoint, app, loopback, Duration.ofSeconds(1), 10, clock, local));
+        assertThrows(IllegalArgumentException.class, () -> new GitHubOAuthUserTokens(client, URI.create("https://github.com/login/oauth/access_token"), app, loopback, Duration.ofSeconds(1), 10, clock, azure));
+        assertThrows(IllegalArgumentException.class, () -> new GitHubOAuthUserTokens(client, endpoint, app, URI.create("https://ingestion.example/cb"), Duration.ofSeconds(1), 10, clock, azure));
+        assertThrows(IllegalArgumentException.class, () -> new GitHubOAuthUserTokens(client, endpoint, app, URI.create("http://10.0.0.1/cb"), Duration.ofSeconds(1), 10, clock, local));
     }
 
     private Map<String, String> fields() {

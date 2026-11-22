@@ -13,8 +13,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 public class OpenApiConfiguration {
     @Bean
     OpenAPI githubOpenApi() {
-        return new OpenAPI().info(new Info().title("Ingestion GitHub connector").version("1.0"))
-                .components(new Components().addSecuritySchemes("entraDelegated", new SecurityScheme()
+        return new OpenAPI().info(new Info().title("Ingestion service").version("1.0"))
+                .components(new Components().addSecuritySchemes("platformBearer", new SecurityScheme()
                         .type(SecurityScheme.Type.HTTP).scheme("bearer").bearerFormat("JWT")));
     }
 }

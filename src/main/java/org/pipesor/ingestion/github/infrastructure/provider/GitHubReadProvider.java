@@ -18,7 +18,7 @@ import tools.jackson.databind.json.JsonMapper;
 import static org.pipesor.ingestion.github.application.services.GitHubAccessFailure.Reason.*;
 
 /** User-token read boundary; admission, restore safety and credential resolution remain external. */
-public final class GitHubReadProvider implements ReadOnlyGitHub {
+public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ingestion.auth.application.ports.GitHubLoginDirectory {
     private static final JsonMapper JSON = JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private final HttpClient client;
@@ -33,13 +33,8 @@ public final class GitHubReadProvider implements ReadOnlyGitHub {
         public Credential { Objects.requireNonNull(identity); GitHubUserTokens.token(token); Objects.requireNonNull(expiresAt); }
         @Override public String toString() { return "GitHubCredential[private]"; }
     }
-    public GitHubReadProvider(Function<Identity, Credential> credentials, String appId, String apiVersion,
-            Duration budget, int pageSize, int maxPages, int maxItems, int maxBytes, Clock clock) {
-        this(HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).connectTimeout(budget).build(),
-                URI.create("https://api.github.com"), credentials, appId, apiVersion, budget, pageSize, maxPages, maxItems, maxBytes, clock);
-    }
-    // Local fixtures exercise the production transport without contacting GitHub.
-    GitHubReadProvider(HttpClient client, URI root, Function<Identity, Credential> credentials, String appId, String apiVersion,
+    /** The API root is validated by the caller's transport policy (configurable GitHub API base URL). */
+    public GitHubReadProvider(HttpClient client, URI root, Function<Identity, Credential> credentials, String appId, String apiVersion,
             Duration budget, int pageSize, int maxPages, int maxItems, int maxBytes, Clock clock) {
         this.client=Objects.requireNonNull(client); this.root=Objects.requireNonNull(root); this.credentials=Objects.requireNonNull(credentials);
         this.appId=Objects.requireNonNull(appId); this.apiVersion=Objects.requireNonNull(apiVersion);
@@ -96,6 +91,56 @@ public final class GitHubReadProvider implements ReadOnlyGitHub {
             return new Observation<>(request,result,clock.instant());
         },true);
     }
+    @Override public Facts read(String userAccessToken, Instant accessExpiresAt) {
+        try {
+            if(TransactionSynchronizationManager.isActualTransactionActive()) { throw failure(UNAVAILABLE); }
+            GitHubUserTokens.token(userAccessToken); Objects.requireNonNull(accessExpiresAt);
+            var session=new Session(userAccessToken,accessExpiresAt,System.nanoTime());
+            session.check();
+            var user=session.get("/user");
+            var userId=id(user,"id"); var login=text(user,"login");
+            if(!login.matches("[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")) { throw failure(UNAVAILABLE); }
+            var repositories=new ArrayList<RepositoryFacts>(); var seen=new HashSet<String>();
+            for(var installation:session.installations()) {
+                for(var repo:session.pages("/user/installations/"+installation.id()+"/repositories","repositories")) {
+                    var facts=facts(repo,installation);
+                    if(!seen.add(facts.target().repositoryId()) || repositories.size()>=maxItems) { throw failure(UNAVAILABLE); }
+                    repositories.add(facts);
+                }
+            }
+            if(!userId.equals(id(session.get("/user"),"id"))) { throw failure(UNAVAILABLE); }
+            session.check();
+            return new Facts(userId,login,List.copyOf(repositories));
+        } catch(GitHubAccessFailure fixed) { throw fixed; }
+        catch(RuntimeException privateFailure) { throw failure(UNAVAILABLE); }
+    }
+    @Override public Observation<RunsRequest,RunPage> failedRuns(RunsRequest request) {
+        return execute(request.workflow().repository().identity(),s -> {
+            positive(request.workflow().workflowId());
+            if(request.page()<1 || request.pageSize()<1 || request.pageSize()>100 || request.page()>maxPages) { throw failure(UNAVAILABLE); }
+            var facts=s.repository(request.workflow().repository().repository());
+            s.verifyRepositoryName(facts);
+            var body=s.get("/repos/"+facts.fullName()+"/actions/workflows/"+request.workflow().workflowId()
+                    +"/runs?status=failure&per_page="+request.pageSize()+"&page="+request.page());
+            var count=body.get("total_count"); var array=body.get("workflow_runs");
+            if(count==null || !count.isIntegralNumber() || !count.canConvertToLong() || count.longValue()<0
+                    || array==null || !array.isArray() || array.size()>request.pageSize()) { throw failure(UNAVAILABLE); }
+            var runs=new ArrayList<WorkflowRun>();
+            for(var item:array) {
+                if(!item.isObject() || !request.workflow().workflowId().equals(id(item,"workflow_id"))) { throw failure(UNAVAILABLE); }
+                var attempt=item.get("run_attempt");
+                if(attempt==null || !attempt.isIntegralNumber() || !attempt.canConvertToInt() || attempt.intValue()<1) { throw failure(UNAVAILABLE); }
+                var conclusion=item.get("conclusion");
+                var branch=item.get("head_branch");
+                runs.add(new WorkflowRun(id(item,"id"),attempt.intValue(),conclusion==null || conclusion.isNull()?null:conclusion.asString(),
+                        branch==null || branch.isNull()?null:branch.asString(),text(item,"head_sha"),Instant.parse(text(item,"created_at")),
+                        URI.create(text(item,"html_url"))));
+            }
+            s.verifyRepositoryName(facts);
+            boolean more=(long)request.page()*request.pageSize()<count.longValue() && !array.isEmpty();
+            return new Observation<>(request,new RunPage(List.copyOf(runs),more),clock.instant());
+        },true);
+    }
     private <T>T execute(Identity identity,Function<Session,T> work,boolean verifyUser) {
         try {
             if(TransactionSynchronizationManager.isActualTransactionActive() || identity==null || identity.link().generationId()==null
@@ -104,7 +149,7 @@ public final class GitHubReadProvider implements ReadOnlyGitHub {
             var started=System.nanoTime();
             var credential=credentials.apply(identity);
             if(credential==null || !identity.equals(credential.identity())) { throw failure(UNAVAILABLE); }
-            var session=new Session(credential,started);
+            var session=new Session(credential.token(),credential.expiresAt(),started);
             session.check();
             if(verifyUser && !identity.link().githubUserId().equals(id(session.get("/user"),"id"))) { throw failure(CONNECTION_REQUIRED); }
             var result=work.apply(session); session.check(); return result;
@@ -113,11 +158,11 @@ public final class GitHubReadProvider implements ReadOnlyGitHub {
     }
     private record Installation(String id,String account,boolean active) {}
     private final class Session {
-        final Credential credential; final long started; int pages; int remainingBytes=maxBytes;
-        Session(Credential credential,long started) { this.credential=credential; this.started=started; }
+        final String token; final Instant expiresAt; final long started; int pages; int remainingBytes=maxBytes;
+        Session(String token,Instant expiresAt,long started) { this.token=token; this.expiresAt=expiresAt; this.started=started; }
         long remaining() {
-            if(!credential.expiresAt().isAfter(clock.instant())) { throw failure(CONNECTION_REQUIRED); }
-            long remaining=Math.min(budget.toNanos()-(System.nanoTime()-started), Duration.between(clock.instant(),credential.expiresAt()).toNanos());
+            if(!expiresAt.isAfter(clock.instant())) { throw failure(CONNECTION_REQUIRED); }
+            long remaining=Math.min(budget.toNanos()-(System.nanoTime()-started), Duration.between(clock.instant(),expiresAt).toNanos());
             if(remaining<=0) { throw failure(UNAVAILABLE); } return remaining;
         }
         void check() { remaining(); }
@@ -179,7 +224,7 @@ public final class GitHubReadProvider implements ReadOnlyGitHub {
                 if(remainingBytes<=0) { throw failure(UNAVAILABLE); }
                 var request=HttpRequest.newBuilder(root.resolve(path)).timeout(Duration.ofNanos(nanos))
                         .header("Accept","application/vnd.github+json").header("X-GitHub-Api-Version",apiVersion)
-                        .header("Authorization","Bearer "+credential.token()).GET().build();
+                        .header("Authorization","Bearer "+token).GET().build();
                 pending=client.sendAsync(request,info->new BoundedBody(remainingBytes));
                 var response=pending.get(nanos,TimeUnit.NANOSECONDS); remainingBytes-=response.body().length; check();
                 if(response.statusCode()==401) { throw failure(CONNECTION_REQUIRED); }

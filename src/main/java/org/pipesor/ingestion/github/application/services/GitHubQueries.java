@@ -11,4 +11,5 @@ public interface GitHubQueries {
     GitHubViews.Repositories discoverRepositories(DiscoverRepositoriesQuery query);
     GitHubViews.Workflows discoverWorkflows(DiscoverWorkflowsQuery query);
     GitHubViews.Selection selectWorkflow(SelectWorkflowQuery query);
+    GitHubViews.Runs listFailedRuns(org.pipesor.ingestion.github.application.queries.ListFailedRunsQuery query);
 }
