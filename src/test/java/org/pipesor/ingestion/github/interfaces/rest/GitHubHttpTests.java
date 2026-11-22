@@ -272,7 +272,9 @@ class GitHubHttpTests {
         assertEquals("https://github.com/example/service/actions/runs/7001", page.get("items").get(0).get("htmlUrl").asString());
         var next = page.get("nextPageToken").asString();
         assertEquals(200, request(base, path + "&pageToken=" + next + "&pageSize=5", session, null, Map.of()).statusCode());
-        assertEquals(400, request(base, path.replace("failure", "success"), session, null, Map.of()).statusCode());
+        // Successful runs are listable as verification candidates; other conclusions are not.
+        assertEquals(200, request(base, path.replace("failure", "success"), session, null, Map.of()).statusCode());
+        assertEquals(400, request(base, path.replace("failure", "cancelled"), session, null, Map.of()).statusCode());
         assertEquals(400, request(base, path + "&pageSize=101", session, null, Map.of()).statusCode());
         assertEquals(400, request(base, path + "&pageToken=forged", session, null, Map.of()).statusCode());
         assertEquals(403, request(base, path, identity.workload(FACTS), null, Map.of()).statusCode());
@@ -416,7 +418,7 @@ class GitHubHttpTests {
         }
         @Override public Observation<RepositoryRequest, List<WorkflowMetadata>> workflows(RepositoryRequest request) { return observed(request, List.of(workflow(request.repository()))); }
         @Override public Observation<WorkflowRequest, WorkflowMetadata> workflow(WorkflowRequest request) { return observed(request, workflow(request.repository().repository())); }
-        @Override public Observation<RunsRequest, RunPage> failedRuns(RunsRequest request) {
+        @Override public Observation<RunsRequest, RunPage> runs(RunsRequest request) {
             reads++;
             return observed(request, new RunPage(List.of(new WorkflowRun("7001", 2, "failure", "main", "a".repeat(40),
                     Instant.parse("2026-11-20T10:00:00Z"), URI.create("https://github.com/example/service/actions/runs/7001"))), true));

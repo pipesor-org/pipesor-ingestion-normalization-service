@@ -19,7 +19,8 @@ import org.pipesor.ingestion.github.domain.model.valueobjects.AccessOperation;
 import org.pipesor.ingestion.github.domain.model.valueobjects.RepositoryTarget;
 
 /**
- * On-demand analysis of a failed run attempt selected by the user (MVP HTTP API v1). Authorization
+ * On-demand capture of a run attempt selected by the user (MVP HTTP API v1): a failed run is analysed into
+ * an incident; a successful run is only recorded as an execution that Pipeline can accept as verification. Authorization
  * requires ADR-020 OPERATE conditions: an admitted installation and repository that the user can read
  * and administers with their current GitHub link, within an operator-admitted machine scope.
  */
@@ -96,7 +97,7 @@ public final class GitHubAnalysisHandler {
                 || !scope.accountId().equals(access.accountId())) throw new AnalysisDenied();
     }
 
-    private static Analysis view(CaptureReceipt receipt, Target target) {
+    private Analysis view(CaptureReceipt receipt, Target target) {
         var phase = switch (receipt.phase()) {
             case "ACCEPTED" -> receipt.claimOwner() == null ? "ACCEPTED" : "PREPARING";
             case "PREPARED" -> "PREPARING";
@@ -106,7 +107,8 @@ public final class GitHubAnalysisHandler {
         UUID execution = null, incident = null;
         if ("PUBLISHED".equals(phase)) {
             execution = PipelineIds.execution(target.repositoryId(), target.runId(), target.attempt());
-            incident = PipelineIds.incident(execution);
+            // Only a failed run opens an incident; a successful one is a verification candidate.
+            if (capture.observedFailure(receipt)) incident = PipelineIds.incident(execution);
         }
         // The ledger blocks receipts only when the admitted machine scope changed or was lost.
         return new Analysis(receipt.id(), phase, "BLOCKED".equals(phase) ? "SCOPE_CHANGED" : null, execution, incident);

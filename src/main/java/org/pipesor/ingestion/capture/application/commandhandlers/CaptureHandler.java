@@ -31,6 +31,10 @@ public final class CaptureHandler {
         verify(expected);
         return ledger.findDelivery(expected, source, deliveryId);
     }
+    /** Whether the receipt's prepared observation recorded a failure; false before preparation. */
+    public boolean observedFailure(CaptureReceipt receipt) {
+        return receipt.observationId() != null && ledger.observedFailure(receipt.observationId());
+    }
     /** Commit this claim before reading protected upstream data; the returned IDs survive every retry. */
     public CaptureReceipt claimPreparation(Claim command) {
         if (command == null) { throw new CaptureFailure(INVALID_INPUT); }

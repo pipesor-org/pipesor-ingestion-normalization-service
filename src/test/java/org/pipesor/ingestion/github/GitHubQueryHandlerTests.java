@@ -155,16 +155,18 @@ class GitHubQueryHandlerTests {
     @Test
     void failedRunsAreListedOnlyForAnAdmittedReadableRepositoryAndRejectDuplicates() {
         var f = new Fixture();
-        var page = f.handler.listFailedRuns(new ListFailedRunsQuery(DISCOVER, FIRST, "82", 1, 24));
+        var page = f.handler.listRuns(new ListRunsQuery(DISCOVER, FIRST, "82", "failure", 1, 24));
         assertEquals(List.of("7001"), page.runs().stream().map(ReadOnlyGitHub.WorkflowRun::runId).toList());
         assertTrue(page.more());
         assertEquals(DISCOVER, page.context());
         f.deniedAdmission = SECOND;
-        failure(DENIED, () -> f.handler.listFailedRuns(new ListFailedRunsQuery(DISCOVER, SECOND, "93", 1, 24)));
+        failure(DENIED, () -> f.handler.listRuns(new ListRunsQuery(DISCOVER, SECOND, "93", "failure", 1, 24)));
         f.deniedAdmission = null;
         f.duplicateRuns = true;
-        failure(UNAVAILABLE, () -> f.handler.listFailedRuns(new ListFailedRunsQuery(DISCOVER, FIRST, "82", 1, 24)));
-        assertThrows(IllegalArgumentException.class, () -> new ListFailedRunsQuery(DISCOVER, FIRST, "82", 1, 101));
+        failure(UNAVAILABLE, () -> f.handler.listRuns(new ListRunsQuery(DISCOVER, FIRST, "82", "failure", 1, 24)));
+        assertThrows(IllegalArgumentException.class, () -> new ListRunsQuery(DISCOVER, FIRST, "82", "failure", 1, 101));
+        // Only failed runs (to analyse) and successful runs (to verify) can be listed.
+        assertThrows(IllegalArgumentException.class, () -> new ListRunsQuery(DISCOVER, FIRST, "82", "cancelled", 1, 24));
     }
 
     @Test
@@ -444,7 +446,7 @@ class GitHubQueryHandlerTests {
         }
 
         @Override
-        public Observation<RunsRequest, RunPage> failedRuns(RunsRequest request) {
+        public Observation<RunsRequest, RunPage> runs(RunsRequest request) {
             workflowReads++;
             var run = new WorkflowRun("7001", 2, "failure", "main", "a".repeat(40), NOW, java.net.URI.create("https://github.com/x/y/actions/runs/7001"));
             return observed("runs", request, new RunPage(duplicateRuns ? List.of(run, run) : List.of(run), true));
