@@ -82,7 +82,7 @@ public final class GitHubAcquisitionControl {
                 .processTimeout(settings.vaultTimeout()).build());
         var signer = machine.githubAppJwtSigner(settings, machine.githubAppMaterial(settings, vault), clock);
         var preparation = new CapturePreparationConfiguration();
-        var profile = preparation.verifyPreparationProfile(env);
+        var profile = preparation.failedRunEvidenceProfile(env);
         var transport = new GitHubMachineTransport(authority, signer, settings.appId(), settings.version(),
                 settings.operationBudget(), settings.pageSize(), settings.maxPages(), settings.maxJobs(),
                 settings.maxResponseBytes(), settings.maxLogBytes(), preparation.captureArchiveLimits(env),
@@ -114,11 +114,11 @@ public final class GitHubAcquisitionControl {
                 env.getRequiredProperty("ingestion.github-machine.api-version"), Duration.ofSeconds(35),
                 100, 2, 100, 4_000_000, 1_000_000, preparation.captureArchiveLimits(env),
                 Set.of("results-receiver.actions.githubusercontent.com"), clock);
-        classify(scope, runId, control, transport, preparation.verifyPreparationProfile(env));
+        classify(scope, runId, control, transport, preparation.failedRunEvidenceProfile(env));
     }
 
     private static void classify(CaptureScope scope, String runId, Control control, GitHubMachineTransport transport,
-            org.pipesor.ingestion.capture.application.services.VerifyPreparationProfile profile) {
+            org.pipesor.ingestion.capture.application.services.FailedRunEvidenceProfile profile) {
         var request = new Request(scope, runId, 1, UUID.randomUUID().toString());
         if (control.jobs().isEmpty()) {
             control.verify(transport.readRun(request));

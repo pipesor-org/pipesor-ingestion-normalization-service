@@ -7,7 +7,7 @@ import org.pipesor.ingestion.capture.application.commands.CaptureCommands.Claim;
 import org.pipesor.ingestion.capture.application.commands.CaptureCommands.Prepare;
 import org.pipesor.ingestion.capture.application.ports.GitHubMachineCapture;
 import org.pipesor.ingestion.capture.application.ports.ProtectedMessageEncoder;
-import org.pipesor.ingestion.capture.application.services.VerifyPreparationProfile;
+import org.pipesor.ingestion.capture.application.services.FailedRunEvidenceProfile;
 import org.pipesor.ingestion.capture.domain.exceptions.CaptureFailure;
 import org.pipesor.ingestion.capture.domain.model.aggregates.CaptureReceipt;
 import org.pipesor.ingestion.normalization.application.commandhandlers.NormalizeObservationHandler;
@@ -18,14 +18,14 @@ import static org.pipesor.ingestion.capture.domain.exceptions.CaptureFailure.Rea
 public final class PrepareGitHubCapture {
     private final CaptureHandler capture;
     private final GitHubMachineCapture github;
-    private final VerifyPreparationProfile profile;
+    private final FailedRunEvidenceProfile profile;
     private final NormalizeObservationHandler normalizer;
     private final ProtectedMessageEncoder encoder;
     private final Clock clock;
     private final int maxWireBytes;
     private final String protectionVersion;
 
-    public PrepareGitHubCapture(CaptureHandler capture, GitHubMachineCapture github, VerifyPreparationProfile profile,
+    public PrepareGitHubCapture(CaptureHandler capture, GitHubMachineCapture github, FailedRunEvidenceProfile profile,
             NormalizeObservationHandler normalizer, ProtectedMessageEncoder encoder, Clock clock,
             int maxWireBytes, String protectionVersion) {
         this.capture = Objects.requireNonNull(capture); this.github = Objects.requireNonNull(github);
@@ -73,7 +73,6 @@ public final class PrepareGitHubCapture {
         receipt.requireClaim(claim.owner(), receipt.claimFence(), clock.instant());
         recheckCaller.run();
         return capture.prepare(new Prepare(receipt.id(), claim.owner(), receipt.claimFence(), result,
-                observation.evidence() != null && observation.evidence().sourceLocator() != null
-                        ? "verify-aggregate-v1" : "verify-preparation-v1", protectionVersion, classified.fragmentLocator(), payloadRecoverUntil));
+                FailedRunEvidenceProfile.VERSION, protectionVersion, classified.fragmentLocator(), payloadRecoverUntil));
     }
 }

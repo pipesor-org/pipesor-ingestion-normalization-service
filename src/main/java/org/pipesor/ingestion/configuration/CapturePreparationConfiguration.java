@@ -5,7 +5,7 @@ import org.pipesor.ingestion.capture.application.commandhandlers.CaptureHandler;
 import org.pipesor.ingestion.capture.application.commandhandlers.PrepareGitHubCapture;
 import org.pipesor.ingestion.capture.application.ports.GitHubMachineCapture;
 import org.pipesor.ingestion.capture.application.ports.ProtectedMessageEncoder;
-import org.pipesor.ingestion.capture.application.services.VerifyPreparationProfile;
+import org.pipesor.ingestion.capture.application.services.FailedRunEvidenceProfile;
 import org.pipesor.ingestion.capture.infrastructure.github.GitHubMachineTransport.ArchiveLimits;
 import org.pipesor.ingestion.normalization.application.commandhandlers.NormalizeObservationHandler;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -23,11 +23,12 @@ public class CapturePreparationConfiguration {
                 number(env, "ingestion.capture-preparation.max-archive-entries"),
                 number(env, "ingestion.github-machine.max-log-bytes"));
     }
-    @Bean VerifyPreparationProfile verifyPreparationProfile(Environment env) {
-        return new VerifyPreparationProfile(number(env, "ingestion.protection.max-input-bytes"));
+    @Bean FailedRunEvidenceProfile failedRunEvidenceProfile(Environment env) {
+        return new FailedRunEvidenceProfile(number(env, "ingestion.capture-preparation.max-expanded-bytes"),
+                number(env, "ingestion.protection.max-input-bytes"));
     }
     @Bean PrepareGitHubCapture prepareGitHubCapture(CaptureHandler capture, GitHubMachineCapture github,
-            VerifyPreparationProfile profile, NormalizeObservationHandler normalizer, ProtectedMessageEncoder encoder,
+            FailedRunEvidenceProfile profile, NormalizeObservationHandler normalizer, ProtectedMessageEncoder encoder,
             Clock clock, Environment env) {
         String version;
         try {

@@ -16,7 +16,7 @@ import org.pipesor.ingestion.capture.application.commandhandlers.PreparationWork
 import org.springframework.orm.jpa.SharedEntityManagerCreator;
 import jakarta.persistence.EntityManagerFactory;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.pipesor.ingestion.capture.application.services.VerifyPreparationProfile;
+import org.pipesor.ingestion.capture.application.services.FailedRunEvidenceProfile;
 import org.pipesor.ingestion.capture.infrastructure.messaging.NormalizedOutputEncoder;
 import org.pipesor.ingestion.normalization.infrastructure.protection.BoundedEvidenceProtection;
 import java.nio.charset.StandardCharsets;
@@ -430,7 +430,7 @@ class CapturePersistenceTests {
                 return read.apply(request);
             }
         };
-        return new PrepareGitHubCapture(handler, github, new VerifyPreparationProfile(100000), new NormalizeObservationHandler(protection),
+        return new PrepareGitHubCapture(handler, github, new FailedRunEvidenceProfile(1_000_000, 100000), new NormalizeObservationHandler(protection),
                 new NormalizedOutputEncoder(), clock, maxWireBytes, "bounded-v1");
     }
     @Test void preparationClaimsBeforeSourceReadAndFreezesOnlyProtectedPlan(CapturedOutput captured) throws Exception {
@@ -447,7 +447,9 @@ class CapturePersistenceTests {
         var bytes = (byte[]) scalar("select payload from ingestion.publication_outputs where id=?", receipt.evidenceMessageId());
         var wire = new String(bytes, StandardCharsets.UTF_8);
         assertFalse(wire.contains("synthetic-private-password")); assertTrue(wire.contains("[redacted]"));
-        assertEquals("v1:job:129926055075:step:4:index:1", scalar("select fragment_locator from ingestion.publication_outputs where id=?", receipt.evidenceMessageId()));
+        String stepLocator = (String) scalar("select fragment_locator from ingestion.publication_outputs where id=?", receipt.evidenceMessageId());
+        assertTrue(stepLocator.matches("v2:job:129926055075:member:verify%2F4_Compile%2C%20test%20with%20isolated%20PostgreSQL%20and%20package\\.txt:lines:1-4:sha256:[0-9a-f]{64}"));
+        assertTrue(wire.contains(stepLocator)); assertTrue(wire.contains("\"schema_version\":\"2.2\""));
         assertTrue(publish(prepared)); assertTrue(publish(prepared));
         assertEquals(receipt.snapshotMessageId(), broker.sent.getFirst().id());
         assertEquals(receipt.evidenceMessageId(), broker.sent.getLast().id());
@@ -465,8 +467,8 @@ class CapturePersistenceTests {
         String locator = (String) scalar("select fragment_locator from ingestion.publication_outputs where id=?", receipt.evidenceMessageId());
         byte[] body = (byte[]) scalar("select payload from ingestion.publication_outputs where id=?", receipt.evidenceMessageId());
         String wire = new String(body, StandardCharsets.UTF_8);
-        assertTrue(locator.startsWith("v2:job:129926055075:member:0_verify.txt:lines:4-4:sha256:"));
-        assertTrue(wire.contains(locator)); assertTrue(wire.contains("\"schema_version\":\"2.1\""));
+        assertTrue(locator.matches("v2:job:129926055075:member:0_verify\\.txt:lines:1-4:sha256:[0-9a-f]{64}"));
+        assertTrue(wire.contains(locator)); assertTrue(wire.contains("\"schema_version\":\"2.2\""));
         assertTrue(wire.contains("[redacted]")); assertFalse(wire.contains("synthetic-private-password"));
         assertTrue(publish(plan)); assertTrue(publish(plan));
         assertArrayEquals(body, broker.sent.getLast().body());
@@ -477,9 +479,9 @@ class CapturePersistenceTests {
         }
     }
 
-    @Test void archiveWithoutBoundStepEvidenceRemainsUnsupportedWithNoFrozenPlan() throws Exception {
+    @Test void failedRunWithoutStepOrAggregateEvidenceRemainsUnsupportedWithNoFrozenPlan() throws Exception {
         var receipt = pilotReceipt();
-        var operation = coordinator(request -> new GitHubMachineCapture.StepLogs(pilotLogs(receipt, false).run(), List.of()),
+        var operation = coordinator(request -> new GitHubMachineCapture.StepLogs(pilotLogs(receipt, true).run(), List.of()),
                 input -> { throw new AssertionError("Unbound evidence reached protection"); }, 120000);
         var worker = new PreparationWorker((now, limit, after) -> List.of(receipt.id()), operation, clock, 1, Duration.ofSeconds(5));
         var result = worker.tick(UUID.randomUUID(), NOW.plusSeconds(30), NOW.plusSeconds(120));

@@ -624,7 +624,38 @@ The conditional generated OpenAPI includes the vendor path and its computed HMAC
 
 Verification on 2026-11-10: README `clean verify` passed 515 tests with zero failures/errors/skips. The final build's Java/resource/pom fingerprints match the current source. Tests include real PostgreSQL webhook acceptance, duplicate/conflicting delivery and concurrency checks; real local HTTP/HMAC/JWT/OpenAPI and deadline/capacity checks; filesystem authority and RSA signing; and simulated Key Vault/CDN boundaries. Sixty core sources compiled with an empty dependency classpath and `jdeps` reported only `java.base`. The packaged JAR excludes test fixtures/libraries; independent review closed the findings. GitHub App, Azure resources and an installation do not exist for this pilot, so no live end-to-end result is claimed. CI was explicitly deferred and was not executed, diagnosed or modified.
 
-## Verify preparation profile v1 — approved locally
+## Failed-run evidence profile v1 (protected evidence 2.2)
+
+`FailedRunEvidenceProfile` (`failed-run-evidence-v1`) replaces the closed Verify
+profile below for every registered repository and workflow. It follows
+[protected evidence 2.2](https://github.com/pipesor-org/pipesor-docs/blob/main/docs/architecture/contracts/protected-evidence-v2.2.md):
+
+- Successful, cancelled, skipped and neutral completed runs produce a snapshot with
+  coarse stages from step metadata and no evidence. Logs are not required.
+- For `failure`/`timed_out`, the first failed job (earliest completion, then id) and
+  its first failed step are selected. The step's own archive member
+  (`<job>/<n>_<step>.txt`) is used when GitHub provides it; otherwise the transport
+  attributes the job's root aggregate member (`N_<job>.txt`) and only the lines
+  inside the failed step's time window are considered.
+- The excerpt is one contiguous range of at most 40 lines ending at the last
+  specific error line (GitHub `##[error]`, Maven `[ERROR]`, npm/yarn, compiler,
+  pytest, Docker build, generic `Error:`/`FAILED` patterns); the generic
+  "Process completed with exit code" line is used only when nothing more specific
+  exists. The range is shortened from its start to fit the protection input limit.
+- The locator percent-encodes the member and binds the 1-based line range and the
+  SHA-256 of the exact original bytes. The evidence message is schema `2.2`.
+- The stage is a coarse classification of the failed step name and excerpt
+  (infrastructure/setup, container, deployment, quality gate, testing, else build).
+  The failure summary is a fixed stage phrase; step names and log text never appear
+  in summaries.
+- A failed run without the failed step's member or an attributable aggregate member
+  stays unsupported and freezes no plan.
+
+The profile is a deterministic selection of evidence, not a diagnosis. Its
+heuristics may pick a symptom instead of the cause; the diagnosis and human review
+downstream remain responsible for interpretation.
+
+## Verify preparation profile v1 — superseded by failed-run evidence v1
 
 **Legacy source profile:** CI was renamed to `.github/workflows/ci.yml` (`CI`) on
 2026-11-11, reordered contribution checks ahead of Maven and added a separate
