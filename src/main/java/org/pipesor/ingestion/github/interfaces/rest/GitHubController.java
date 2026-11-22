@@ -136,7 +136,7 @@ public class GitHubController {
         binding(context, result.context(), result.link(), result.observedAt());
         var next = result.more() && page < maxRunPages ? token(page + 1) : null;
         return new GitHubResources.Runs(result.runs().stream().map(run -> new GitHubResources.Run(run.runId(), run.attempt(),
-                run.conclusion(), run.headBranch(), run.headSha(), run.createdAt(), run.htmlUrl().toString())).toList(), next);
+                run.conclusion(), run.headBranch(), run.headSha(), run.createdAt(), run.runStartedAt(), run.htmlUrl().toString())).toList(), next);
     }
 
     @GetMapping("/api/v1/github/connection")

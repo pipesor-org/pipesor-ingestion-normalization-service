@@ -23,8 +23,14 @@ public interface ReadOnlyGitHub {
     record RepositoryRequest(Identity identity, RepositoryTarget repository) {}
     record WorkflowRequest(RepositoryRequest repository, String workflowId) {}
     record RunsRequest(WorkflowRequest workflow, String conclusion, int page, int pageSize) {}
+    /** {@code runStartedAt} is when this attempt started; GitHub keeps {@code createdAt} from the first attempt. */
     record WorkflowRun(String runId, int attempt, String conclusion, String headBranch, String headSha,
-                       java.time.Instant createdAt, java.net.URI htmlUrl) {}
+                       java.time.Instant createdAt, java.time.Instant runStartedAt, java.net.URI htmlUrl) {
+        public WorkflowRun(String runId, int attempt, String conclusion, String headBranch, String headSha,
+                           java.time.Instant createdAt, java.net.URI htmlUrl) {
+            this(runId, attempt, conclusion, headBranch, headSha, createdAt, null, htmlUrl);
+        }
+    }
     record RunPage(List<WorkflowRun> runs, boolean more) {
         public RunPage { runs = List.copyOf(runs); }
     }
