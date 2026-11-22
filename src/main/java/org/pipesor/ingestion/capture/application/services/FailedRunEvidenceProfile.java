@@ -85,7 +85,9 @@ public final class FailedRunEvidenceProfile {
             StageName stage = stage(step, excerpt.text());
             failure = new Failure(stage, summary(stage), excerpt.detectedAt());
             locator = SourceLocator.of(job.id(), text.member(), excerpt.first(), excerpt.last(), sha256(excerpt.raw()));
-            evidence = new Evidence(stage, job.id(), excerpt.raw(), null, locator);
+            // The digest covers the original bytes (BOM included); the excerpt handed to protection does not carry it.
+            String visible = excerpt.raw().startsWith("\uFEFF") ? excerpt.raw().substring(1) : excerpt.raw();
+            evidence = new Evidence(stage, job.id(), visible, null, locator);
         }
         var request = run.request();
         var observation = new WorkflowObservation(request.scope().context(), request.scope().pipeline(),

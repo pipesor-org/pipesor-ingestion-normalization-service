@@ -64,6 +64,17 @@ class FailedRunEvidenceProfileTests {
         assertEquals("v2:job:991002:member:0_build.txt:lines:2-2:sha256:" + sha(selected), result.fragmentLocator());
     }
 
+    @Test void digestKeepsTheOriginalBomWhileTheExcerptDropsIt() throws Exception {
+        var setup = new Step(1, "Set up job", "completed", "failure", START, START.plusSeconds(3));
+        var job = job("failure", setup);
+        String raw = "\uFEFF" + line(0, "Current runner version: '2.329.0'") + line(2, "##[error]Unable to resolve action x");
+        var result = profile.classify(new StepLogs(run("failure", job), List.of(),
+                List.of(new AggregateLog(job.id(), "0_build.txt", bytes(raw)))));
+        assertFalse(result.observation().evidence().excerpt().startsWith("\uFEFF"));
+        assertEquals(raw.substring(1), result.observation().evidence().excerpt());
+        assertTrue(result.fragmentLocator().endsWith(":lines:1-2:sha256:" + sha(raw)));
+    }
+
     @Test void containerFailureFallsBackToTheGenericExitLine() throws Exception {
         var image = new Step(4, "Build Docker image", "completed", "failure", START, START.plusSeconds(5));
         String log = line(1, "#5 [2/4] RUN apt-get update") + line(2, "#5 exit code: 100")
