@@ -99,6 +99,7 @@ class FailedRunEvidenceProfileTests {
         var result = profile.classify(new StepLogs(run("failure", job), List.of(new StepLog(job.id(), 3, bytes(log)))));
         var excerpt = result.observation().evidence().excerpt();
         assertFalse(excerpt.contains("\u001B"));
+        assertEquals(StageName.QUALITY_GATE, result.observation().failure().stage(), "commit validation is a quality gate");
         assertTrue(excerpt.contains("✖   header must not be longer than 72 characters [header-max-length]"));
         String original = line(1, "\u001B[31m✖\u001B[39m   header must not be longer than 72 characters \u001B[90m[header-max-length]\u001B[39m")
                 + line(2, "error: script \"commitlint\" exited with code 1");

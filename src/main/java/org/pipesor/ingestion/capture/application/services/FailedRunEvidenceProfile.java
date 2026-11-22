@@ -211,7 +211,7 @@ public final class FailedRunEvidenceProfile {
         }
         if (name.matches(".*\\b(docker|image|container|buildx)\\b.*") || text.contains("failed to solve")) return StageName.CONTAINER;
         if (name.matches(".*\\b(deploy|release|publish|helm|kubectl|terraform apply)\\b.*")) return StageName.DEPLOYMENT;
-        if (name.matches(".*\\b(lint|sonar|quality|scan|codeql|coverage|format|checkstyle|audit)\\b.*")) return StageName.QUALITY_GATE;
+        if (name.matches(".*\\b(lint|commitlint|validate|sonar|quality|scan|codeql|coverage|format|checkstyle|audit)\\b.*")) return StageName.QUALITY_GATE;
         if (name.matches(".*\\b(test|tests|pytest|jest|junit|e2e)\\b.*") || text.contains("surefire") || text.contains("tests run:")
                 && text.contains("failures: ") || text.matches("(?s).*\\bfailed\\b.*\\btests?\\b.*")) return StageName.TESTING;
         return StageName.BUILD;
