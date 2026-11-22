@@ -41,6 +41,12 @@ public final class GitHubResources {
                                    AccessOperation operation, String githubUserId, UUID generationId, String revision,
                                    Instant observedAt, Instant validUntil) {}
     public record Repositories(DiscoveryContext context, List<Repository> repositories) {}
+    /** ADR-024: {@code admitted} means Pipesor may monitor the repository; {@code userIsAdmin} is the user's GitHub role. */
+    public record RepositoryAdmission(String repositoryId, String fullName, boolean admitted, boolean userIsAdmin) {}
+    public record Account(String id, String login) {}
+    /** {@code suspended} installations list no repositories until GitHub resumes them. */
+    public record Installation(String installationId, Account account, boolean suspended, List<RepositoryAdmission> repositories) {}
+    public record Installations(DiscoveryContext context, List<Installation> installations) {}
     public record Workflows(DiscoveryContext context, Repository repository, List<Workflow> workflows) {}
     public record Run(String runId, int attempt, String conclusion, String headBranch, String headSha, Instant createdAt,
                       Instant runStartedAt, String htmlUrl) {}

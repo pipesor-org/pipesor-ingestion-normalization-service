@@ -32,4 +32,13 @@ public final class GitHubViews {
         public Runs { runs = List.copyOf(runs); }
     }
     public record Selection(Access access, Repository repository, WorkflowMetadata workflow) {}
+    /** ADR-024: per repository, whether Pipesor admits it and whether the user administers it on GitHub. */
+    public record RepositoryAdmission(String repositoryId, String fullName, boolean admitted, boolean userIsAdmin) {}
+    public record Installation(String installationId, String accountId, String accountLogin, boolean active,
+                               List<RepositoryAdmission> repositories) {
+        public Installation { repositories = List.copyOf(repositories); }
+    }
+    public record Installations(AccessContext context, GitHubLink link, Instant observedAt, List<Installation> installations) {
+        public Installations { installations = List.copyOf(installations); }
+    }
 }

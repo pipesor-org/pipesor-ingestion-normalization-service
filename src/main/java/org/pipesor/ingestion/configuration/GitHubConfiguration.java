@@ -177,8 +177,8 @@ public class GitHubConfiguration {
     }
 
     @Bean
-    GitHubQueries githubQueries(ConnectedGitHubLink link, CaptureAuthority authority, GitHubReadProvider provider, Clock clock) {
-        return new GitHubQueryHandler(link, authority, provider, clock);
+    GitHubQueries githubQueries(ConnectedGitHubLink link, JdbcCaptureAuthority authority, GitHubReadProvider provider, Clock clock) {
+        return new GitHubQueryHandler(link, authority, authority, provider, clock);
     }
 
     /** Vendor-HMAC ingress for the admitted machine scopes of the configured capture domain. */

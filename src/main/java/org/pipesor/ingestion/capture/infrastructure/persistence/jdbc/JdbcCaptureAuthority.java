@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -33,7 +34,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * the owned {@code ingestion} schema. Every decision reads current rows; failures never fall back
  * to a cached or permissive answer.
  */
-public final class JdbcCaptureAuthority implements CaptureAuthority, CaptureWorkflowScopes {
+public final class JdbcCaptureAuthority implements CaptureAuthority, CaptureWorkflowScopes,
+        org.pipesor.ingestion.github.application.ports.RepositoryAdmissions {
     private static final String SCOPE_COLUMNS = """
             capture_domain, tenant_id, app_id, account_id, installation_id, repository_id, workflow_id,
             allowed_actions, extract(epoch from replay_window)::bigint as replay_seconds, scope_revision""";
@@ -100,7 +102,10 @@ public final class JdbcCaptureAuthority implements CaptureAuthority, CaptureWork
             return jdbc.query("select " + SCOPE_COLUMNS + """
                      from ingestion.capture_workflow_scopes
                     where capture_domain = ? and tenant_id = ? and app_id = ? and repository_id = ? and workflow_id = ?
-                      and status = 'ACTIVE' and 'completed' = any(allowed_actions)""",
+                      and status = 'ACTIVE' and 'completed' = any(allowed_actions)
+                      and exists (select 1 from ingestion.repository_admissions a where a.tenant_id = capture_workflow_scopes.tenant_id
+                                   and a.app_id = capture_workflow_scopes.app_id and a.repository_id = capture_workflow_scopes.repository_id
+                                   and a.revoked_at is null)""",
                     this::row, domain, tenant, appId, repositoryId, workflowId).stream().findFirst().map(Row::scope);
         } catch (RuntimeException unavailable) {
             throw captureUnavailable();
@@ -161,7 +166,7 @@ public final class JdbcCaptureAuthority implements CaptureAuthority, CaptureWork
                 CaptureScope.external(id);
                 var installation = jdbc.query("""
                         select installation_id from ingestion.repository_admissions
-                         where tenant_id = ? and app_id = ? and repository_id = ?""",
+                         where tenant_id = ? and app_id = ? and repository_id = ? and revoked_at is null""",
                         (rs, i) -> rs.getString(1), tenant, appId, id).stream().findFirst();
                 result.put(id, installation.map(found -> new RepositoryTarget(id, found)));
             }
@@ -203,7 +208,7 @@ public final class JdbcCaptureAuthority implements CaptureAuthority, CaptureWork
         return transactions.execute(status -> {
             var admission = jdbc.query("""
                     select account_id, installation_id from ingestion.repository_admissions
-                     where tenant_id = ? and app_id = ? and repository_id = ? for share""",
+                     where tenant_id = ? and app_id = ? and repository_id = ? and revoked_at is null for share""",
                     (rs, i) -> new String[]{rs.getString(1), rs.getString(2)},
                     request.tenantId(), appId, request.repositoryId()).stream().findFirst().orElseThrow(NotAdmitted::new);
             var synced = jdbc.query("""
@@ -238,9 +243,55 @@ public final class JdbcCaptureAuthority implements CaptureAuthority, CaptureWork
                 insert into ingestion.repository_admissions (tenant_id, app_id, account_id, installation_id, repository_id,
                   admitted_at, admitted_by) values (?, ?, ?, ?, ?, ?, ?)
                 on conflict (tenant_id, repository_id) do update set account_id = excluded.account_id,
-                  installation_id = excluded.installation_id, app_id = excluded.app_id""",
+                  installation_id = excluded.installation_id, app_id = excluded.app_id, source = 'operator',
+                  revoked_at = null, revoked_by = null""",
                 tenant, appId, CaptureScope.external(account), CaptureScope.external(installation),
                 CaptureScope.external(repository), Timestamp.from(at), admittedBy);
+    }
+
+    /**
+     * ADR-024: the subject administers the repository in a pipesor installation, as just read from GitHub. Creates a new
+     * admission or reactivates a revoked one; an active admission bound to another account or installation is never
+     * rebound here (that stays an operator decision), so the call then grants nothing.
+     */
+    @Override public boolean admitByAdministrator(Admission admission) {
+        Objects.requireNonNull(admission);
+        try {
+            var granted = jdbc.query("""
+                    insert into ingestion.repository_admissions as current (tenant_id, app_id, account_id, installation_id,
+                      repository_id, admitted_at, admitted_by, source)
+                    values (?, ?, ?, ?, ?, ?, ?, 'repository_administrator')
+                    on conflict (tenant_id, repository_id) do update set
+                      account_id = excluded.account_id, installation_id = excluded.installation_id, app_id = excluded.app_id,
+                      admitted_at = excluded.admitted_at, admitted_by = excluded.admitted_by, source = excluded.source,
+                      revoked_at = null, revoked_by = null
+                    where current.revoked_at is not null
+                    returning repository_id""", (rs, i) -> rs.getString(1),
+                    tenant(admission.tenantId()), appId, CaptureScope.external(admission.accountId()),
+                    CaptureScope.external(admission.installationId()), CaptureScope.external(admission.repositoryId()),
+                    Timestamp.from(admission.at()), admission.subjectRef());
+            return !granted.isEmpty();
+        } catch (RuntimeException unavailable) {
+            throw accessUnavailable();
+        }
+    }
+
+    /** ADR-024: GitHub no longer lists these repositories in the installation (deselected or uninstalled). */
+    @Override public List<String> revokeAbsent(Revocation revocation) {
+        Objects.requireNonNull(revocation);
+        try {
+            CaptureScope.external(revocation.installationId());
+            revocation.listedRepositoryIds().forEach(CaptureScope::external);
+            return jdbc.query("""
+                    update ingestion.repository_admissions set revoked_at = ?, revoked_by = ?
+                     where tenant_id = ? and app_id = ? and installation_id = ? and revoked_at is null
+                       and not (repository_id = any(?))
+                    returning repository_id""", (rs, i) -> rs.getString(1),
+                    Timestamp.from(revocation.at()), revocation.subjectRef(), tenant(revocation.tenantId()), appId,
+                    revocation.installationId(), revocation.listedRepositoryIds().toArray(String[]::new));
+        } catch (RuntimeException unavailable) {
+            throw accessUnavailable();
+        }
     }
 
     /** Legacy scopes keep their reviewed scope revision so previously captured evidence stays verifiable. */
@@ -259,7 +310,10 @@ public final class JdbcCaptureAuthority implements CaptureAuthority, CaptureWork
         return jdbc.query("select " + SCOPE_COLUMNS + """
                  from ingestion.capture_workflow_scopes
                 where capture_domain = ? and tenant_id = ? and app_id = ? and account_id = ? and installation_id = ?
-                  and repository_id = ? and workflow_id = ? and scope_revision = ? and status = 'ACTIVE'""",
+                  and repository_id = ? and workflow_id = ? and scope_revision = ? and status = 'ACTIVE'
+                  and exists (select 1 from ingestion.repository_admissions a where a.tenant_id = capture_workflow_scopes.tenant_id
+                               and a.app_id = capture_workflow_scopes.app_id and a.repository_id = capture_workflow_scopes.repository_id
+                               and a.revoked_at is null)""",
                 this::row, expected.captureDomain(), expected.tenantId(), expected.appId(), expected.accountId(),
                 expected.installationId(), expected.repositoryId(), expected.workflowId(), expected.scopeRevision())
                 .stream().findFirst();
@@ -268,7 +322,8 @@ public final class JdbcCaptureAuthority implements CaptureAuthority, CaptureWork
     private boolean admission(UUID tenant, String account, String installation, String repository) {
         Long count = jdbc.queryForObject("""
                 select count(*) from ingestion.repository_admissions
-                 where tenant_id = ? and app_id = ? and account_id = ? and installation_id = ? and repository_id = ?""",
+                 where tenant_id = ? and app_id = ? and account_id = ? and installation_id = ? and repository_id = ?
+                   and revoked_at is null""",
                 Long.class, tenant, appId, account, installation, repository);
         return count != null && count > 0;
     }

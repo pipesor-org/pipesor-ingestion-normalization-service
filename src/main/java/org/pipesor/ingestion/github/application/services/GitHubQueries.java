@@ -9,6 +9,8 @@ import org.pipesor.ingestion.github.application.queries.VerifyAccessQuery;
 public interface GitHubQueries {
     GitHubViews.Access verifyAccess(VerifyAccessQuery query);
     GitHubViews.Repositories discoverRepositories(DiscoverRepositoriesQuery query);
+    /** ADR-024: the user's pipesor installations and per-repository admission, reconciled with GitHub. */
+    GitHubViews.Installations listInstallations(DiscoverRepositoriesQuery query);
     GitHubViews.Workflows discoverWorkflows(DiscoverWorkflowsQuery query);
     GitHubViews.Selection selectWorkflow(SelectWorkflowQuery query);
     GitHubViews.Runs listRuns(org.pipesor.ingestion.github.application.queries.ListRunsQuery query);

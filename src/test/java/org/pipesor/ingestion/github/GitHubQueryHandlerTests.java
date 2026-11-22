@@ -145,6 +145,8 @@ class GitHubQueryHandlerTests {
         var both = f.handler.discoverRepositories(new DiscoverRepositoriesQuery(DISCOVER));
         assertEquals(2, both.repositories().size());
         f.deniedAdmission = SECOND;
+        // Only a repository the user administers can be admitted on discovery (ADR-024); a reader stays filtered.
+        f.facts.put(SECOND, facts(SECOND, true, true, true, true, false));
         var visible = f.handler.discoverRepositories(new DiscoverRepositoriesQuery(DISCOVER));
         assertEquals(List.of(FIRST), visible.repositories().stream().map(GitHubViews.Repository::target).toList());
         assertFalse(visible.toString().contains("org-two"));
@@ -289,6 +291,49 @@ class GitHubQueryHandlerTests {
         failure(UNAVAILABLE, () -> f.handler.verifyAccess(new VerifyAccessQuery(VIEW, Set.of(FIRST, SECOND))));
     }
 
+    // ADR-024: repository administrator self-service admission.
+    private static final RepositoryTarget THIRD = new RepositoryTarget("77001", "670");
+
+    @Test
+    void anAdministratorsRepositoryIsAdmittedOnDiscoveryAndListedAsAdmitted() {
+        var f = new Fixture();
+        f.facts.put(THIRD, facts(THIRD, true, true, true, true, true));
+        var discovered = f.handler.discoverRepositories(new DiscoverRepositoriesQuery(DISCOVER));
+        assertTrue(discovered.repositories().stream().anyMatch(repository -> repository.target().equals(THIRD)));
+        assertEquals(java.util.Set.of(THIRD), f.selfAdmitted);
+        var installation = f.handler.listInstallations(new DiscoverRepositoriesQuery(DISCOVER)).installations().stream()
+                .filter(candidate -> candidate.installationId().equals("670")).findFirst().orElseThrow();
+        var third = installation.repositories().stream().filter(repository -> repository.repositoryId().equals("77001")).findFirst().orElseThrow();
+        assertTrue(third.admitted() && third.userIsAdmin());
+        assertEquals("acct-two", installation.accountId());
+    }
+
+    @Test
+    void aReaderWhoIsNotAdministratorAdmitsNothing() {
+        var f = new Fixture();
+        f.facts.put(THIRD, facts(THIRD, true, true, true, true, false));
+        var discovered = f.handler.discoverRepositories(new DiscoverRepositoriesQuery(DISCOVER));
+        assertFalse(discovered.repositories().stream().anyMatch(repository -> repository.target().equals(THIRD)));
+        assertTrue(f.selfAdmitted.isEmpty());
+        var third = f.handler.listInstallations(new DiscoverRepositoriesQuery(DISCOVER)).installations().stream()
+                .flatMap(installation -> installation.repositories().stream())
+                .filter(repository -> repository.repositoryId().equals("77001")).findFirst().orElseThrow();
+        assertFalse(third.admitted() || third.userIsAdmin());
+    }
+
+    @Test
+    void onlyRepositoriesListedByTheInstallationStayAdmitted() {
+        var f = new Fixture();
+        f.revokedOnNextCall = java.util.Set.of("99999");
+        f.handler.discoverRepositories(new DiscoverRepositoriesQuery(DISCOVER));
+        // One revocation pass per installation, carrying exactly what GitHub lists there; nothing else is admitted.
+        assertEquals(2, f.revocations.size());
+        var forSecond = f.revocations.stream().filter(revocation -> revocation.installationId().equals("670")).findFirst().orElseThrow();
+        assertEquals(java.util.Set.of("33590"), forSecond.listedRepositoryIds());
+        assertEquals(DISCOVER.subjectRef(), forSecond.subjectRef());
+        assertTrue(f.selfAdmitted.isEmpty(), "a repository GitHub does not list in the installation is never admitted");
+    }
+
     @Test
     void admissionRejectsAnotherAccountForTheSameRepositoryAndInstallation() {
         var f = new Fixture();
@@ -392,7 +437,23 @@ class GitHubQueryHandlerTests {
         int linkReads;
         int providerCalls;
         int workflowReads;
-        final GitHubQueryHandler handler = new GitHubQueryHandler(this::link, this::admission, this, CLOCK);
+        final java.util.Set<RepositoryTarget> selfAdmitted = new java.util.HashSet<>();
+        final List<org.pipesor.ingestion.github.application.ports.RepositoryAdmissions.Revocation> revocations = new ArrayList<>();
+        java.util.Set<String> revokedOnNextCall = java.util.Set.of();
+        final org.pipesor.ingestion.github.application.ports.RepositoryAdmissions repositoryAdmissions =
+                new org.pipesor.ingestion.github.application.ports.RepositoryAdmissions() {
+            @Override public boolean admitByAdministrator(Admission admission) {
+                var target = new RepositoryTarget(admission.repositoryId(), admission.installationId());
+                // FIRST and SECOND already hold active operator admissions (unless denied): never rebound.
+                boolean active = (target.equals(FIRST) || target.equals(SECOND)) && !target.equals(deniedAdmission);
+                return !active && selfAdmitted.add(target);
+            }
+            @Override public List<String> revokeAbsent(Revocation revocation) {
+                revocations.add(revocation);
+                return List.copyOf(revokedOnNextCall);
+            }
+        };
+        final GitHubQueryHandler handler = new GitHubQueryHandler(this::link, this::admission, repositoryAdmissions, this, CLOCK);
 
         Fixture() {
             facts.put(FIRST, facts(FIRST, true, true, true, true, true));
@@ -411,7 +472,8 @@ class GitHubQueryHandlerTests {
             boolean knownAccountInstallation = request.repository().equals(FIRST) && request.accountId().equals("acct-one")
                     || request.repository().equals(SECOND) && request.accountId().equals("acct-two");
             return observed("admission", request, request.identity().context().tenantId().equals("tenant-a")
-                    && knownAccountInstallation && !request.repository().equals(deniedAdmission));
+                    && (knownAccountInstallation && !request.repository().equals(deniedAdmission)
+                    || selfAdmitted.contains(request.repository())));
         }
 
         @Override
@@ -431,6 +493,20 @@ class GitHubQueryHandlerTests {
         public Observation<Identity, List<RepositoryFacts>> repositories(Identity request) {
             providerCalls++;
             return observed("repositories", request, List.copyOf(facts.values()));
+        }
+
+        @Override
+        public Observation<Identity, List<InstallationRepositories>> installations(Identity request) {
+            providerCalls++;
+            var grouped = new java.util.TreeMap<String, List<RepositoryFacts>>();
+            for (var value : facts.values()) {
+                if (value == null) { return observed("repositories", request, java.util.Arrays.asList((InstallationRepositories) null)); }
+                grouped.computeIfAbsent(value.target().installationId(), key -> new ArrayList<>()).add(value);
+            }
+            // Same read boundary as repositories(): discovery now reads installations.
+            return observed("repositories", request, grouped.values().stream().map(values -> new InstallationRepositories(
+                    values.get(0).target().installationId(), values.get(0).accountId(), "login-" + values.get(0).accountId(),
+                    true, values)).toList());
         }
 
         @Override

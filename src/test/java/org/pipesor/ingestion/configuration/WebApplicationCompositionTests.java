@@ -79,7 +79,7 @@ class WebApplicationCompositionTests {
             assertInstanceOf(ConnectedGitHubLink.class, context.getBean(CurrentGitHubLink.class));
             assertNotNull(context.getBean(GitHubLogin.class));
             assertNotNull(context.getBean(PublicationRunner.class));
-            assertEquals(Integer.valueOf(4), new org.springframework.jdbc.core.JdbcTemplate(context.getBean(javax.sql.DataSource.class))
+            assertEquals(Integer.valueOf(5), new org.springframework.jdbc.core.JdbcTemplate(context.getBean(javax.sql.DataSource.class))
                     .queryForObject("select count(*) from ingestion.flyway_schema_history where success and version is not null", Integer.class));
             var base = URI.create("http://127.0.0.1:" + ((WebServerApplicationContext) context).getWebServer().getPort());
             try (var client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build()) {
