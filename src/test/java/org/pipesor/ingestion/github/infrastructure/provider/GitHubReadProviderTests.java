@@ -77,6 +77,28 @@ class GitHubReadProviderTests {
         var selected=provider().workflow(new WorkflowRequest(request(),"71992547409933222")).value();assertEquals("CI beta",selected.name());assertEquals(".github/workflows/beta.yml",selected.file());
         assertEquals(4,calls.stream().filter("/repos/owner/repository"::equals).count());
     }
+    @Test void loginDirectoryReadsTheTokenUserAndEveryInstallationRepository(CapturedOutput output){
+        responses.put("/user","{\"id\":9207199254740999,\"login\":\"octo-cat\"}");
+        var facts=provider().read("private-user-token",expiry);
+        assertEquals("9207199254740999",facts.githubUserId());assertEquals("octo-cat",facts.login());
+        assertEquals(TARGET,facts.repositories().getFirst().target());assertEquals("54",facts.repositories().getFirst().accountId());
+        assertEquals(0,credentials.get());assertFalse(output.getAll().contains("private-user-token"));
+        responses.put("/user","{\"id\":9207199254740999,\"login\":\"../bad\"}");
+        fail(UNAVAILABLE,()->provider().read("private-user-token",expiry));
+        fail(CONNECTION_REQUIRED,()->provider().read("private-user-token",NOW));
+    }
+    @Test void failedRunsAreOneBoundedPageOfTheSelectedWorkflow(){
+        var run="{\"id\":7001,\"workflow_id\":71992547409933222,\"run_attempt\":2,\"conclusion\":\"failure\",\"head_branch\":\"main\",\"head_sha\":\"abc\",\"created_at\":\"2026-11-08T10:00:00Z\",\"html_url\":\"https://github.com/owner/repository/actions/runs/7001\"}";
+        var path="/repos/owner/repository/actions/workflows/71992547409933222/runs?status=failure&per_page=1&page=1";
+        responses.put(path,"{\"total_count\":3,\"workflow_runs\":["+run+"]}");
+        var runs=new RunsRequest(new WorkflowRequest(request(),"71992547409933222"),1,1);
+        var page=provider().failedRuns(runs).value();
+        assertEquals("7001",page.runs().getFirst().runId());assertEquals(2,page.runs().getFirst().attempt());assertTrue(page.more());
+        responses.put(path,"{\"total_count\":3,\"workflow_runs\":["+run.replace("71992547409933222","1")+"]}");
+        fail(UNAVAILABLE,()->provider().failedRuns(runs));
+        responses.put(path,"{\"total_count\":3,\"workflow_runs\":["+run+","+run+"]}");
+        fail(UNAVAILABLE,()->provider().failedRuns(runs));
+    }
     @Test void preservesTrueAdministrationAndNullableBranchWithoutDefaultBranchFilter(){
         responses.put("/user/installations/81/repositories?per_page=2&page=1",page("repositories",REPO.replace("\"admin\":false","\"admin\":true").replace("\"default_branch\":null","\"default_branch\":\"release\"")));
         var facts=provider().repository(request()).value();assertTrue(facts.administrator());assertEquals("release",facts.defaultBranch());

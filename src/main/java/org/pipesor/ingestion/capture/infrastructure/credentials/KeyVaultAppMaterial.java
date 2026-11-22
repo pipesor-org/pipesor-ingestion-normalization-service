@@ -24,13 +24,19 @@ public final class KeyVaultAppMaterial {
     private final SecretClient client;
     private final URI vault;
     private final String appId;
-    private final Reference signing,webhook;
+    private final Reference signing,webhook,clientSecret;
     private final int maxBytes;
     public KeyVaultAppMaterial(SecretClient client,URI approvedVault,String appId,Reference signing,Reference webhook,int maxBytes) {
+        this(client,approvedVault,appId,signing,null,Objects.requireNonNull(webhook),maxBytes);
+    }
+    /** The client secret and webhook secret are optional references; reading an absent one fails closed. */
+    public KeyVaultAppMaterial(SecretClient client,URI approvedVault,String appId,Reference signing,Reference clientSecret,Reference webhook,int maxBytes) {
         try {
             this.client=Objects.requireNonNull(client);this.vault=vault(approvedVault);this.appId=CaptureScope.external(appId);
-            this.signing=Objects.requireNonNull(signing);this.webhook=Objects.requireNonNull(webhook);
-            if(!vault.equals(vault(URI.create(client.getVaultUrl()))) || signing.name().equalsIgnoreCase(webhook.name()) || maxBytes<1 || maxBytes>25000)
+            this.signing=Objects.requireNonNull(signing);this.webhook=webhook;this.clientSecret=clientSecret;
+            var names=new java.util.HashSet<String>();
+            for(var reference:new Reference[]{signing,clientSecret,webhook}) if(reference!=null && !names.add(reference.name().toLowerCase(Locale.ROOT))) throw new IllegalArgumentException();
+            if(!vault.equals(vault(URI.create(client.getVaultUrl()))) || maxBytes<1 || maxBytes>25000)
                 throw new IllegalArgumentException();
             this.maxBytes=maxBytes;
         }catch(RuntimeException invalid){throw new IllegalArgumentException("Invalid App material configuration");}
@@ -57,7 +63,12 @@ public final class KeyVaultAppMaterial {
         catch(RuntimeException | GeneralSecurityException privateFailure){throw new CaptureFailure(UNAVAILABLE);}
         finally{if(der!=null)Arrays.fill(der,(byte)0);if(encoded!=null&&encoded!=der)Arrays.fill(encoded,(byte)0);}
     }
+    public String clientSecret() {
+        if(clientSecret==null)throw new CaptureFailure(UNAVAILABLE);
+        return read(clientSecret).strip();
+    }
     public byte[] webhookSecret() {
+        if(webhook==null)throw new CaptureFailure(UNAVAILABLE);
         try {
             var encoded=StandardCharsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).encode(java.nio.CharBuffer.wrap(read(webhook)));
             var result=new byte[encoded.remaining()];encoded.get(result);return result;

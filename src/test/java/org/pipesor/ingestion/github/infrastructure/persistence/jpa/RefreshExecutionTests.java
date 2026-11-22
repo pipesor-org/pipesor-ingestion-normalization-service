@@ -9,7 +9,7 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.pipesor.ingestion.configuration.GitHubPersistenceConfiguration;
+import org.pipesor.ingestion.configuration.TestConnectionConfiguration;
 import org.pipesor.ingestion.github.application.commands.ConnectionCommands.*;
 import org.pipesor.ingestion.github.application.commands.RefreshCommand;
 import org.pipesor.ingestion.github.application.commandhandlers.RefreshHandler;
@@ -48,7 +48,7 @@ class RefreshExecutionTests {
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration
     @EntityScan(basePackageClasses = ConnectionJpaEntities.class)
-    @Import(GitHubPersistenceConfiguration.class)
+    @Import(TestConnectionConfiguration.class)
     static class Setup { @Bean Clock clock() { return new MutableClock(); } }
     static final class MutableClock extends Clock {
         volatile Instant now = NOW;
@@ -59,9 +59,9 @@ class RefreshExecutionTests {
     @BeforeAll static void start() {
         postgres = new PostgreSQLContainer("postgres:17.11"); postgres.start();
         Flyway.configure().dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword()).defaultSchema("ingestion").schemas("ingestion").load().migrate();
-        context = new SpringApplicationBuilder(Setup.class).web(WebApplicationType.NONE).properties(
+        context = new SpringApplicationBuilder(Setup.class).web(WebApplicationType.NONE).initializers(c -> org.springframework.boot.test.util.TestPropertyValues.of(
                 "spring.datasource.url=" + postgres.getJdbcUrl(), "spring.datasource.username=" + postgres.getUsername(),
-                "spring.datasource.password=" + postgres.getPassword()).run();
+                "spring.datasource.password=" + postgres.getPassword()).applyTo(c)).run();
         commands = context.getBean(GitHubConnections.class); clock = (MutableClock) context.getBean(Clock.class);
         snapshots = new JpaRefreshSnapshotReader(SharedEntityManagerCreator.createSharedEntityManager(context.getBean(EntityManagerFactory.class)), context.getBean(PlatformTransactionManager.class));
     }

@@ -18,7 +18,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.postgresql.util.PSQLException;
-import org.pipesor.ingestion.configuration.GitHubPersistenceConfiguration;
+import org.pipesor.ingestion.configuration.TestConnectionConfiguration;
 import org.pipesor.ingestion.github.application.commands.ConnectionCommands.*;
 import org.pipesor.ingestion.github.application.queries.ConnectionStatusQuery;
 import org.pipesor.ingestion.github.application.services.GitHubConnectionQueries;
@@ -53,7 +53,7 @@ class GitHubMetadataPersistenceTests {
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration
     @EntityScan(basePackageClasses = ConnectionJpaEntities.class)
-    @Import(GitHubPersistenceConfiguration.class)
+    @Import(TestConnectionConfiguration.class)
     static class MetadataTestConfiguration {
         @Bean Clock clock() { return new MutableClock(); }
     }
@@ -64,11 +64,11 @@ class GitHubMetadataPersistenceTests {
         Flyway.configure().dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
                 .defaultSchema("ingestion").schemas("ingestion").load().migrate();
         context = new SpringApplicationBuilder(MetadataTestConfiguration.class).web(WebApplicationType.NONE)
-                .properties("spring.datasource.url=" + postgres.getJdbcUrl(),
+                .initializers(c -> org.springframework.boot.test.util.TestPropertyValues.of("spring.datasource.url=" + postgres.getJdbcUrl(),
                         "spring.datasource.username=" + postgres.getUsername(),
                         "spring.datasource.password=" + postgres.getPassword(),
                         "spring.jpa.hibernate.ddl-auto=validate", "spring.flyway.enabled=false",
-                        "logging.level.org.hibernate.orm.jdbc.error=OFF", "logging.level.org.hibernate.SQL=OFF")
+                        "logging.level.org.hibernate.orm.jdbc.error=OFF", "logging.level.org.hibernate.SQL=OFF").applyTo(c))
                 .run();
         commands = context.getBean(GitHubConnections.class);
         queries = context.getBean(GitHubConnectionQueries.class);

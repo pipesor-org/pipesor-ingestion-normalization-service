@@ -21,7 +21,6 @@ import static org.pipesor.ingestion.github.application.ports.GitHubUserTokens.Fa
 
 /** One explicit POST, no redirects/retry loop. Does not establish identity, admission or browser continuity. */
 public final class GitHubOAuthUserTokens implements GitHubUserTokens {
-    private static final URI ENDPOINT = URI.create("https://github.com/login/oauth/access_token");
     private static final JsonMapper JSON = JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private final HttpClient client;
     private final URI endpoint;
@@ -36,24 +35,16 @@ public final class GitHubOAuthUserTokens implements GitHubUserTokens {
         @Override public String toString() { return "ClientCredentials[private]"; }
     }
 
-    public GitHubOAuthUserTokens(Supplier<ClientCredentials> credentials, URI approvedRedirect,
-            Duration timeout, int maxResponseBytes, Clock clock) {
-        this(HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).connectTimeout(timeout).build(),
-                ENDPOINT, credentials, approvedRedirect, timeout, maxResponseBytes, clock);
-    }
-
-    // Local HTTP fixtures use the same transport; runtime construction fixes the GitHub endpoint above.
-    GitHubOAuthUserTokens(HttpClient client, URI endpoint, Supplier<ClientCredentials> credentials, URI approvedRedirect,
-            Duration timeout, int maxResponseBytes, Clock clock) {
+    /** Endpoint and redirect are validated by the transport policy: HTTPS, or loopback HTTP under {@code local}. */
+    public GitHubOAuthUserTokens(HttpClient client, URI endpoint, Supplier<ClientCredentials> credentials, URI approvedRedirect,
+            Duration timeout, int maxResponseBytes, Clock clock, org.pipesor.ingestion.shared.security.TransportPolicy transport) {
         this.client = Objects.requireNonNull(client);
-        this.endpoint = Objects.requireNonNull(endpoint);
+        this.endpoint = transport.require(Objects.requireNonNull(endpoint));
         this.credentials = Objects.requireNonNull(credentials);
-        this.redirect = Objects.requireNonNull(approvedRedirect);
+        this.redirect = transport.require(Objects.requireNonNull(approvedRedirect));
         this.timeout = Objects.requireNonNull(timeout);
         this.clock = Objects.requireNonNull(clock);
-        if (client.followRedirects() != HttpClient.Redirect.NEVER || !"https".equals(redirect.getScheme())
-                || redirect.getHost() == null || redirect.getUserInfo() != null || redirect.getFragment() != null
-                || redirect.getQuery() != null || redirect.getHost().endsWith(".invalid")
+        if (client.followRedirects() != HttpClient.Redirect.NEVER || redirect.getHost().endsWith(".invalid")
                 || timeout.isNegative() || timeout.isZero() || maxResponseBytes < 1) {
             throw new IllegalArgumentException("Explicit secure OAuth transport configuration required");
         }
