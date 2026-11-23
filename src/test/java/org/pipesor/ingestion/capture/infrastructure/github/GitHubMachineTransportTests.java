@@ -52,8 +52,11 @@ class GitHubMachineTransportTests {
             else if(path.endsWith("/jobs/701/logs")||path.endsWith("/attempts/3/logs")){status=302;body="";e.getResponseHeaders().add("Location",mode.equals("evil-download")?"https://evil.example/log?private-link":"https://logs.example/log?private-link");}
             else if(path.endsWith("/jobs/701"))body=job("701",1);
             else if(path.endsWith("/jobs")) {
-                int page=e.getRequestURI().getRawQuery().contains("page=2")?2:1;
-                body="{\"total_count\":2,\"jobs\":["+job(page==1||mode.equals("duplicate-job")?"701":"702",page)+"]}";
+                var query=e.getRequestURI().getRawQuery();int page=query.contains("&page=3")?3:query.contains("page=2")?2:1;
+                String item=page<3?job(page==1||mode.equals("duplicate-job")?"701":"702",page)
+                        :mode.equals("same-name-skipped")?"{\"id\":703,\"run_id\":"+RUN+",\"run_attempt\":3,\"name\":\"job-2\",\"status\":\"completed\",\"conclusion\":\"skipped\",\"started_at\":null,\"completed_at\":null,\"steps\":[]}"
+                        :job("703",3).replace("\"name\":\"job-3\"","\"name\":\"job-2\"");
+                body="{\"total_count\":"+(mode.startsWith("same-name-")?3:2)+",\"jobs\":["+item+"]}";
                 if(mode.equals("expire"))now=NOW.plusSeconds(300);
             } else {
                 int reads=runReads.incrementAndGet();body=run();
@@ -169,6 +172,26 @@ class GitHubMachineTransportTests {
         assertEquals("701", result.aggregates().getFirst().jobId());
         members.put("job-1/2_Run actions_checkout@fixture.txt", new byte[1]);
         archive = zip(members);
+        failure(UNAVAILABLE, () -> archiveAdapter(4096, 256, 8, 64).readStepLogs(request));
+    }
+
+    @Test void aSkippedJobSharingANameDoesNotHideTheJobThatRan() throws Exception {
+        mode = "same-name-skipped";
+        // Real layout (runs 45130104537, 45130191568): two "Deploy API" jobs, one failed and one skipped without steps.
+        archive = zip(Map.of("job-1/1_step-1.txt", "first".getBytes(StandardCharsets.UTF_8),
+                "job-2/2_step-2.txt", "ran".getBytes(StandardCharsets.UTF_8), "job-2/system.txt", new byte[4]));
+        var logs = archiveAdapter(4096, 256, 8, 64).readStepLogs(request).logs();
+        assertEquals(Set.of("701#1", "702#2"), new HashSet<>(logs.stream().map(l -> l.jobId() + "#" + l.stepNumber()).toList()));
+    }
+
+    @Test void sameNamedJobsThatBothRanAreAmbiguousAndBindNothing() throws Exception {
+        mode = "same-name-ran";
+        archive = zip(Map.of("job-1/1_step-1.txt", "first".getBytes(StandardCharsets.UTF_8)));
+        var logs = archiveAdapter(4096, 256, 8, 64).readStepLogs(request).logs();
+        assertEquals(List.of("701"), logs.stream().map(GitHubMachineCapture.StepLog::jobId).toList());
+        archive = zip(Map.of("job-1/1_step-1.txt", new byte[1], "job-2/2_step-2.txt", new byte[1]));
+        failure(UNAVAILABLE, () -> archiveAdapter(4096, 256, 8, 64).readStepLogs(request));
+        archive = zip(Map.of("job-1/1_step-1.txt", new byte[1], "1_job-2.txt", new byte[1]));
         failure(UNAVAILABLE, () -> archiveAdapter(4096, 256, 8, 64).readStepLogs(request));
     }
 
