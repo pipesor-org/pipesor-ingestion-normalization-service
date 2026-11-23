@@ -83,7 +83,7 @@ public final class GitHubFileAuthority implements CaptureAuthority {
         } catch(CaptureFailure invalid){if(invalid.reason()==CaptureFailure.Reason.INVALID_INPUT)return Optional.empty();throw captureUnavailable();}
         catch(RuntimeException unavailable){throw captureUnavailable();}
     }
-    @Override public boolean admitted(UUID tenant,String accountId,RepositoryTarget repository) {
+    public boolean admitted(UUID tenant,String accountId,RepositoryTarget repository) {
         try {
             Objects.requireNonNull(tenant);Objects.requireNonNull(repository);
             return load().human().stream().anyMatch(a->a.tenant().equals(tenant)&&a.account().equals(accountId)

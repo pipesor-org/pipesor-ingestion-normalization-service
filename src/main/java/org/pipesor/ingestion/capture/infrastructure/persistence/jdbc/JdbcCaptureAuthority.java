@@ -123,7 +123,7 @@ public final class JdbcCaptureAuthority implements CaptureAuthority, CaptureWork
                 .orElseThrow(() -> new CaptureFailure(CaptureFailure.Reason.SCOPE_CHANGED));
     }
 
-    @Override public boolean admitted(UUID tenant, String accountId, RepositoryTarget repository) {
+    public boolean admitted(UUID tenant, String accountId, RepositoryTarget repository) {
         try {
             Objects.requireNonNull(tenant);
             Objects.requireNonNull(repository);

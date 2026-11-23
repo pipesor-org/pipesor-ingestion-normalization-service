@@ -1,7 +1,6 @@
 package org.pipesor.ingestion.capture.infrastructure.configuration;
 
 import java.util.function.Function;
-import org.pipesor.ingestion.auth.application.ports.HumanAdmissions;
 import org.pipesor.ingestion.capture.application.ports.CurrentMachineScope;
 import org.pipesor.ingestion.capture.application.ports.MachineScopes;
 import org.pipesor.ingestion.capture.interfaces.webhook.GitHubWorkflowWebhook.Authorization;
@@ -13,7 +12,7 @@ import org.pipesor.ingestion.normalization.domain.model.valueobjects.WorkflowObs
 
 /** Runtime capture and admission authority (ADR-023); every check reads current state, no positive cache. */
 public interface CaptureAuthority extends MachineScopes, CurrentMachineScope, InstallationAdmission,
-        GitHubRepositorySelection, HumanAdmissions {
+        GitHubRepositorySelection {
     /** Readiness: the authority store answers; it does not authorize a request. */
     void validate();
 

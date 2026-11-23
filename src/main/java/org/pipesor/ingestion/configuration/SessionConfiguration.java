@@ -10,7 +10,6 @@ import org.pipesor.ingestion.auth.application.ports.SessionIssuer;
 import org.pipesor.ingestion.auth.application.services.GitHubLogin;
 import org.pipesor.ingestion.auth.infrastructure.github.GitHubAuthorizeUrls;
 import org.pipesor.ingestion.auth.infrastructure.persistence.JdbcLoginAttempts;
-import org.pipesor.ingestion.capture.infrastructure.configuration.CaptureAuthority;
 import org.pipesor.ingestion.github.application.ports.ConnectionStatusReader;
 import org.pipesor.ingestion.github.application.ports.GitHubCredentialCustody;
 import org.pipesor.ingestion.github.application.ports.GitHubUserTokens;
@@ -65,14 +64,14 @@ public class SessionConfiguration {
 
     @Bean
     GitHubLogin githubLogin(PlatformSecurityProperties platform, LoginAttempts attempts, GitHubAuthorization authorization,
-            GitHubUserTokens tokens, GitHubReadProvider directory, CaptureAuthority admissions,
+            GitHubUserTokens tokens, GitHubReadProvider directory,
             GitHubCredentialCustody custody, GitHubConnections connections, ConnectionStatusReader statuses,
             SessionTokens sessions, Clock clock) {
         SessionIssuer issuer = githubUserId -> {
             var token = sessions.issue(githubUserId);
             return new SessionIssuer.Issued(token.value(), token.expiresAt());
         };
-        return new GitHubLoginHandler(platform.tenantId(), attempts, authorization, tokens, directory, admissions, custody,
+        return new GitHubLoginHandler(platform.tenantId(), attempts, authorization, tokens, directory, custody,
                 connections, statuses, issuer, clock);
     }
 

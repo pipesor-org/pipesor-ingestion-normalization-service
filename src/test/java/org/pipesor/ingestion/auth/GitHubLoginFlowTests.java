@@ -128,8 +128,7 @@ class GitHubLoginFlowTests {
         SessionIssuer issuer = id -> { var token = tokens.issue(id); return new SessionIssuer.Issued(token.value(), token.expiresAt()); };
         login = new GitHubLoginHandler(TENANT, new JdbcLoginAttempts(new JdbcTemplate(context.getBean(DataSource.class))),
                 (state, challenge) -> { var uri = URI.create("https://github.com/login/oauth/authorize?state=" + state + "&code_challenge=" + challenge); authorizeUrls.add(uri); return uri; },
-                github, github, (tenant, account, target) -> tenant.equals(TENANT) && account.equals("240") && target.equals(REPOSITORY),
-                custody, connections, statuses, issuer, CLOCK);
+                github, github, custody, connections, statuses, issuer, CLOCK);
         links = new ConnectedGitHubLink(statuses, snapshots, custody, new RefreshHandler(connections, snapshots, custody, github, CLOCK), CLOCK);
     }
 
@@ -185,10 +184,15 @@ class GitHubLoginFlowTests {
         login.logout(new LoginCommands.Logout(new ConnectionIdentity(TENANT, PlatformIds.human(42))));
     }
 
-    @Test void refusesUnadmittedUsersDeniedConsentExpiredAttemptsAndForgedValues() {
+    @Test void anyGitHubUserSignsInWithoutAdministeringAnAdmittedRepository() {
+        // ADR-025: sign-in is open; repository access is governed per repository (ADR-020/ADR-024), not at login.
         github.administrator = false;
-        assertEquals(LoginFailure.Reason.NOT_ADMITTED, assertThrows(LoginFailure.class, this::callback).reason());
+        var handoff = callback();
+        assertTrue(login.exchange(new LoginCommands.Exchange(handoff)).accessToken().length() > 0);
         github.administrator = true;
+    }
+
+    @Test void refusesDeniedConsentExpiredAttemptsAndForgedValues() {
         var denied = query(login.start(new LoginCommands.Start("/", "corr")), "state");
         assertEquals(LoginFailure.Reason.ACCESS_DENIED, assertThrows(LoginFailure.class,
                 () -> login.callback(new LoginCommands.Callback(null, denied, "access_denied", "corr"))).reason());
