@@ -143,6 +143,7 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
         var expected=new HashMap<String,StepLog>();var jobs=new HashSet<String>();
         var bindable = new HashMap<String,String>();
         var systemLogs = new HashSet<String>();
+        var labelledLogs = new HashSet<String>();
         for(var job:run.jobs()){
             String directory = archiveJobDirectory(job.name());
             if (!jobs.add(directory)) throw new CaptureFailure(UNAVAILABLE);
@@ -156,6 +157,8 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
                     if (!Arrays.stream(step.name().split("/", -1)).allMatch(GitHubMachineTransport::safeArchiveComponent)) {
                         throw new CaptureFailure(UNAVAILABLE);
                     }
+                    // GitHub spells "Run actions/checkout@v4" as "Run actions_checkout@v4" in the ZIP: bounded, never evidence.
+                    labelledLogs.add(job.name() + "/" + step.number() + "_" + step.name().replace('/', '_') + ".txt");
                     continue;
                 }
                 if(expected.put(job.name()+"/"+step.number()+"_"+step.name()+".txt",new StepLog(job.id(),step.number(),new byte[0]))!=null)throw new CaptureFailure(UNAVAILABLE);
@@ -183,7 +186,7 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
                 if(++count>archiveLimits.maxEntries()||!seen.add(name)||!central.remove(name))throw new CaptureFailure(UNAVAILABLE);
                 var selected=expected.get(name);boolean folder=entry.isDirectory()&&jobs.contains(name.substring(0,name.length()-1));
                 boolean aggregate=jobs.stream().anyMatch(job->name.matches("[0-9]+_"+java.util.regex.Pattern.quote(job)+"\\.txt"));
-                if(selected==null&&!folder&&!aggregate&&!systemLogs.contains(name))throw new CaptureFailure(UNAVAILABLE);
+                if(selected==null&&!folder&&!aggregate&&!systemLogs.contains(name)&&!labelledLogs.contains(name))throw new CaptureFailure(UNAVAILABLE);
                 String aggregateJob = name.matches("[0-9]{1,9}_[^/]+\\.txt") ? aggregateJobs.get(name.substring(name.indexOf('_') + 1, name.length() - 4)) : null;
                 boolean attributable = aggregateJob != null;
                 var bytes=new ByteArrayOutputStream();var buffer=new byte[8192];int read;

@@ -16,6 +16,7 @@ import static org.pipesor.ingestion.capture.domain.exceptions.CaptureFailure.Rea
 
 /** Explicit bounded pass with caller-owned absolute horizons; no scheduler or implicit recovery policy. */
 public final class PreparationWorker {
+    private static final System.Logger LOG = System.getLogger(PreparationWorker.class.getName());
     public record Result(int attempted, int prepared, int unsupported, int protectionRefused, int unavailable,
             int blocked, int stale, boolean budgetExhausted, boolean interrupted, boolean horizonExpired) {}
     private final PreparationReadyReceipts ready;
@@ -72,6 +73,7 @@ public final class PreparationWorker {
                 handler.prepare(new Claim(receipt, owner, leaseUntil), payloadRecoverUntil);
                 prepared++;
             } catch (CaptureFailure failure) {
+                outcome(receipt, "capture", failure.reason().name());
                 switch (failure.reason()) {
                     case INVALID_INPUT -> {
                         now = clock.instant();
@@ -84,14 +86,19 @@ public final class PreparationWorker {
                     default -> unavailable++;
                 }
             } catch (NormalizationFailure failure) {
+                outcome(receipt, "normalization", failure.reason().name());
                 switch (failure.reason()) {
                     case PROTECTION_REFUSED -> refused++;
                     case PROTECTION_UNAVAILABLE, INVALID_PROTECTION_RESULT, SERIALIZATION_FAILED -> unavailable++;
                     default -> unsupported++;
                 }
-            } catch (RuntimeException failure) { unavailable++; }
+            } catch (RuntimeException failure) { outcome(receipt, "unexpected", failure.getClass().getName()); unavailable++; }
         }
         return new Result(attempted, prepared, unsupported, refused, unavailable, blocked, stale, exhausted, interrupted, expired);
+    }
+    /** Fixed reason or exception class only: provider messages and evidence never reach the log. */
+    private static void outcome(UUID receipt, String stage, String reason) {
+        LOG.log(System.Logger.Level.WARNING, "Preparation attempt failed: receipt={0} stage={1} reason={2}", receipt, stage, reason);
     }
     private void validate(List<UUID> candidates) {
         if (candidates == null || candidates.size() > batchSize || candidates.stream().anyMatch(Objects::isNull)
