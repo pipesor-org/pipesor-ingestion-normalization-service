@@ -154,6 +154,24 @@ class GitHubMachineTransportTests {
         failure(UNAVAILABLE, () -> archiveAdapter(4096, 128, 3, 16).readStepLogs(request));
     }
 
+    @Test void recognizesGitHubsUnderscoredActionStepMembersAsAncillaryOnly() throws Exception {
+        mode = "action-label";
+        // Real GitHub layout (run 45111170919): "Run actions/checkout@..." is stored as "N_Run actions_checkout@....txt".
+        var members = new HashMap<String,byte[]>();
+        members.put("0_job-1.txt", "aggregate".getBytes(StandardCharsets.UTF_8));
+        members.put("job-1/system.txt", new byte[8]);
+        members.put("job-1/1_Run actions_checkout@fixture.txt", "action output".getBytes(StandardCharsets.UTF_8));
+        members.put("job-2/2_step-2.txt", "bound step".getBytes(StandardCharsets.UTF_8));
+        archive = zip(members);
+        var result = archiveAdapter(4096, 256, 8, 64).readStepLogs(request);
+        assertEquals(1, result.logs().size());
+        assertEquals("702", result.logs().getFirst().jobId());
+        assertEquals("701", result.aggregates().getFirst().jobId());
+        members.put("job-1/2_Run actions_checkout@fixture.txt", new byte[1]);
+        archive = zip(members);
+        failure(UNAVAILABLE, () -> archiveAdapter(4096, 256, 8, 64).readStepLogs(request));
+    }
+
     @Test void recognizesCurrentCiReusableJobAncillariesWithoutBindingStepsThroughAnAlias() throws Exception {
         mode = "reusable-job";
         var members = new HashMap<String,byte[]>();
