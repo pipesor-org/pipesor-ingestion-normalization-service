@@ -50,7 +50,10 @@ public final class PrepareGitHubCapture {
         var request = new GitHubMachineCapture.Request(receipt.scope(), receipt.runId(), receipt.runAttempt(), receipt.correlationId());
         GitHubMachineCapture.StepLogs source;
         try { source = github.readStepLogs(request); }
-        catch (CaptureFailure failure) { throw failure; }
+        catch (CaptureFailure failure) {
+            if (failure.reason() == SOURCE_EXPIRED) { capture.expire(receipt.id()); }
+            throw failure;
+        }
         catch (RuntimeException unavailable) { throw new CaptureFailure(UNAVAILABLE); }
         receipt.requireClaim(claim.owner(), receipt.claimFence(), clock.instant());
         if (source == null || source.run() == null || !request.equals(source.run().request())) {

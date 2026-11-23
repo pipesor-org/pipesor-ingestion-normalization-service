@@ -254,6 +254,8 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
                 pending=client.sendAsync(builder.build(),info->new Bounded(available));var response=pending.get(nanos,TimeUnit.NANOSECONDS);check();authorized();check();if(!download)remaining-=response.body().length;
                 // An authorized attempt can have no retained archive. Its log or CDN 404 cannot prove scope loss.
                 if(response.statusCode()==404 && expected!=302 && !download)throw new CaptureFailure(SCOPE_CHANGED);
+                // GitHub answers 410 Gone once the run's logs passed the repository's retention period: permanent, not transient.
+                if(response.statusCode()==410 && expected==302 && !download)throw new CaptureFailure(SOURCE_EXPIRED);
                 if(response.body().length>available || response.statusCode()!=expected || response.headers().firstValue("X-GitHub-SSO").isPresent())throw new CaptureFailure(UNAVAILABLE);
                 if(expected!=302&&!download&&!Set.of("application/json","application/vnd.github+json").contains(response.headers().firstValue("Content-Type").orElse("").split(";",2)[0].strip().toLowerCase(Locale.ROOT)))throw new CaptureFailure(UNAVAILABLE);
                 return response;

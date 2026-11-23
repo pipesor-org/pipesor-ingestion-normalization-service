@@ -42,7 +42,7 @@ public final class CaptureJpaEntities {
         CaptureReceipt snapshot() {
             return new CaptureReceipt(id, new CaptureScope(captureDomain, tenantId, appId, accountId, installationId,
                     repositoryId, workflowId, scopeRevision), runId, runAttempt, correlationId, snapshotMessageId,
-                    evidenceMessageId, phase, observationId, claimOwner, claimFence, leaseUntil);
+                    evidenceMessageId, phase, observationId, claimOwner, claimFence, leaseUntil, blockedReason);
         }
     }
     @Entity(name = "CaptureDeliveryAliasRow")

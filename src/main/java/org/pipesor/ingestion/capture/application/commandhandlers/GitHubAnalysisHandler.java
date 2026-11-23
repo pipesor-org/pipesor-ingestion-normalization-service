@@ -110,7 +110,8 @@ public final class GitHubAnalysisHandler {
             // Only a failed run opens an incident; a successful one is a verification candidate.
             if (capture.observedFailure(receipt)) incident = PipelineIds.incident(execution);
         }
-        // The ledger blocks receipts only when the admitted machine scope changed or was lost.
-        return new Analysis(receipt.id(), phase, "BLOCKED".equals(phase) ? "SCOPE_CHANGED" : null, execution, incident);
+        // BLOCKED is terminal: the admitted scope changed (SCOPE_CHANGED) or GitHub no longer retains the run's logs (SOURCE_EXPIRED).
+        var reason = "BLOCKED".equals(phase) ? (receipt.blockedReason() == null ? "SCOPE_CHANGED" : receipt.blockedReason()) : null;
+        return new Analysis(receipt.id(), phase, reason, execution, incident);
     }
 }
