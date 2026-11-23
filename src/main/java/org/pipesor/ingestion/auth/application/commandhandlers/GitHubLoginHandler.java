@@ -47,7 +47,6 @@ public final class GitHubLoginHandler implements GitHubLogin {
     private final GitHubAuthorization authorization;
     private final GitHubUserTokens tokens;
     private final GitHubLoginDirectory directory;
-    private final HumanAdmissions admissions;
     private final GitHubCredentialCustody custody;
     private final GitHubConnections connections;
     private final ConnectionStatusReader statuses;
@@ -56,11 +55,11 @@ public final class GitHubLoginHandler implements GitHubLogin {
     private final SecureRandom random = new SecureRandom();
 
     public GitHubLoginHandler(UUID tenant, LoginAttempts attempts, GitHubAuthorization authorization, GitHubUserTokens tokens,
-            GitHubLoginDirectory directory, HumanAdmissions admissions, GitHubCredentialCustody custody,
+            GitHubLoginDirectory directory, GitHubCredentialCustody custody,
             GitHubConnections connections, ConnectionStatusReader statuses, SessionIssuer sessions, Clock clock) {
         this.tenant = Objects.requireNonNull(tenant); this.attempts = Objects.requireNonNull(attempts);
         this.authorization = Objects.requireNonNull(authorization); this.tokens = Objects.requireNonNull(tokens);
-        this.directory = Objects.requireNonNull(directory); this.admissions = Objects.requireNonNull(admissions);
+        this.directory = Objects.requireNonNull(directory);
         this.custody = Objects.requireNonNull(custody); this.connections = Objects.requireNonNull(connections);
         this.statuses = Objects.requireNonNull(statuses); this.sessions = Objects.requireNonNull(sessions);
         this.clock = Objects.requireNonNull(clock);
@@ -96,12 +95,9 @@ public final class GitHubLoginHandler implements GitHubLogin {
             if (command.error() != null || command.code() == null) { throw new LoginFailure(ACCESS_DENIED); }
             var pair = tokens.exchange(new GitHubUserTokens.AuthorizationCode(command.code(), custody.readVerifier(claimed.verifier())));
             if (pair.accessExpiresAt().isAfter(clock.instant().plus(MAX_USER_TOKEN_LIFETIME))) { throw new LoginFailure(UNAVAILABLE); }
+            // ADR-025: any GitHub user who authorizes the App may sign in. Signing in grants no data: every read and
+            // command re-checks current GitHub access per repository, and repositories are admitted per ADR-024.
             var facts = directory.read(pair.accessToken(), pair.accessExpiresAt());
-            // Same checks as the former operator link script: an active installation of this App whose
-            // account and repository are admitted for the tenant, with the user administering that repository.
-            boolean admitted = facts.repositories().stream().anyMatch(repository -> repository.readable()
-                    && repository.administrator() && admissions.admitted(tenant, repository.accountId(), repository.target()));
-            if (!admitted) { throw new LoginFailure(NOT_ADMITTED); }
             long githubUserId = Long.parseLong(facts.githubUserId());
             var identity = new ConnectionIdentity(tenant, PlatformIds.human(githubUserId));
             var connection = connection(identity);
