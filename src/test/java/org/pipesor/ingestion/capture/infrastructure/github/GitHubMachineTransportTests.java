@@ -63,6 +63,7 @@ class GitHubMachineTransportTests {
                 if(download!=null&&mode.equals("changed-after-log"))body=body.replace("11:03:00.987654321Z","11:04:00.987654321Z");
             }
             if(mode.equals("missing-archive")&&path.endsWith("/logs")){status=404;}
+            if(mode.equals("expired-archive")&&path.endsWith("/logs")){status=410;}
             if(mode.equals("changed-attempt-after-log")&&download!=null&&path.endsWith("/attempts/3"))body=body.replace("\"run_attempt\":3","\"run_attempt\":4");
             if(mode.equals("action-label")&&path.endsWith("/jobs"))body=body.replace("step-1","Run actions/checkout@fixture");
             if(mode.startsWith("reusable-")&&path.endsWith("/jobs")){
@@ -182,6 +183,12 @@ class GitHubMachineTransportTests {
     @Test void missingAttemptArchiveIsUnavailableAndDoesNotFollowTheLocation() {
         mode = "missing-archive";
         failure(UNAVAILABLE, () -> archiveAdapter(4096, 128, 3, 16).readStepLogs(request));
+        assertNull(download);
+    }
+
+    @Test void expiredArchiveIsTerminalAndDoesNotFollowTheLocation() {
+        mode = "expired-archive";
+        failure(SOURCE_EXPIRED, () -> archiveAdapter(4096, 128, 3, 16).readStepLogs(request));
         assertNull(download);
     }
 

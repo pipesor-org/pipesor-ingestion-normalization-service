@@ -14,7 +14,9 @@ public interface CaptureLedger {
     Optional<CaptureReceipt> findDelivery(CaptureScope scope, String source, String deliveryId);
     CaptureReceipt claimPreparation(Claim command, Instant now);
     CaptureReceipt prepare(Prepare command, Instant now);
-    void blockReceipt(UUID id, Instant now);
+    default void blockReceipt(UUID id, Instant now) { blockReceipt(id, now, "SCOPE_CHANGED"); }
+    /** Terminal stop for an ACCEPTED or PREPARED receipt; reason is SCOPE_CHANGED or SOURCE_EXPIRED. */
+    void blockReceipt(UUID id, Instant now, String reason);
     Optional<PublicationOutput> claimOutput(UUID observationId, UUID owner, Instant leaseUntil, Instant now);
     void confirm(PublicationOutput output, Instant now);
     void retry(PublicationOutput output, Instant nextAttemptAt, Instant now);

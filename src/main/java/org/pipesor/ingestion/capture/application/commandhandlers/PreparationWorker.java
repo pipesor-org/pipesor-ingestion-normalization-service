@@ -79,6 +79,7 @@ public final class PreparationWorker {
                         else { unsupported++; }
                     }
                     case SCOPE_CHANGED -> blocked++;
+                    case SOURCE_EXPIRED -> unsupported++;
                     case STALE_CLAIM, INVALID_STATE, NOT_FOUND -> stale++;
                     default -> unavailable++;
                 }

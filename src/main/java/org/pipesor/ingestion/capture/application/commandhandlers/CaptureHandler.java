@@ -42,6 +42,11 @@ public final class CaptureHandler {
         checkReceiptScope(receipt);
         return ledger.claimPreparation(command, clock.instant());
     }
+    /** The source permanently withdrew the run's logs (retention): stop this receipt instead of retrying it. */
+    public void expire(UUID receiptId) {
+        try { ledger.blockReceipt(receiptId, clock.instant(), "SOURCE_EXPIRED"); }
+        catch (CaptureFailure failure) { if (failure.reason() != STALE_CLAIM) { throw failure; } }
+    }
     public CaptureReceipt prepare(Prepare command) {
         if (command == null) { throw new CaptureFailure(INVALID_INPUT); }
         var receipt = ledger.receipt(command.receiptId());

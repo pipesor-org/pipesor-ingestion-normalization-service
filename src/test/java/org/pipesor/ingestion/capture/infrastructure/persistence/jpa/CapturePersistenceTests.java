@@ -532,6 +532,16 @@ class CapturePersistenceTests {
         return new JpaPreparationReadyReceipts(SharedEntityManagerCreator.createSharedEntityManager(context.getBean(EntityManagerFactory.class)),
                 context.getBean(PlatformTransactionManager.class));
     }
+    @Test void expiredSourceBlocksAClaimedReceiptWithItsReasonAndOnlyKnownReasonsAreStored() {
+        var claimed = claim(accept()); var scoped = accept();
+        ledger.blockReceipt(claimed.id(), NOW, "SOURCE_EXPIRED");
+        ledger.blockReceipt(scoped.id(), NOW);
+        var expired = ledger.receipt(claimed.id());
+        assertEquals("BLOCKED", expired.phase()); assertEquals("SOURCE_EXPIRED", expired.blockedReason()); assertNull(expired.claimOwner());
+        assertEquals("SCOPE_CHANGED", ledger.receipt(scoped.id()).blockedReason());
+        assertNull(ledger.receipt(accept().id()).blockedReason());
+        assertEquals(INVALID_INPUT, assertThrows(CaptureFailure.class, () -> ledger.blockReceipt(accept().id(), NOW, "ANYTHING")).reason());
+    }
     @Test void preparationDiscoveryUsesPhaseAndExactLeaseBoundaryWithoutReplayCutoff() {
         var waiting = accept(); var leased = claim(accept()); var frozen = prepared(false); var blocked = accept();
         ledger.blockReceipt(blocked.id(), NOW);

@@ -185,7 +185,8 @@ public final class JpaCaptureLedger implements CaptureLedger {
         }
         if (snapshot != 1 || evidence != required - 1) { throw new CaptureFailure(CONFLICT); }
     }
-    @Override public void blockReceipt(UUID id, Instant time) {
+    @Override public void blockReceipt(UUID id, Instant time, String reason) {
+        if (!java.util.Set.of("SCOPE_CHANGED", "SOURCE_EXPIRED").contains(reason)) { throw new CaptureFailure(INVALID_INPUT); }
         execute(() -> {
             var now = technical(time);
             var observed = row(id, false).snapshot().observationId();
@@ -194,9 +195,9 @@ public final class JpaCaptureLedger implements CaptureLedger {
             var current = row(id, true).snapshot();
             if (!java.util.Objects.equals(observed, current.observationId())) { throw new CaptureFailure(STALE_CLAIM); }
             query("""
-                    update ingestion.capture_receipts set phase='BLOCKED',blocked_reason='SCOPE_CHANGED',claim_owner=null,lease_until=null,
+                    update ingestion.capture_receipts set phase='BLOCKED',blocked_reason=?3,claim_owner=null,lease_until=null,
                     revision=revision+1,updated_at=?2 where id=?1 and phase in ('ACCEPTED','PREPARED')
-                    """, id, now).executeUpdate();
+                    """, id, now, reason).executeUpdate();
             return null;
         });
     }

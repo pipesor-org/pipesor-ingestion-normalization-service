@@ -21,13 +21,21 @@ public final class CaptureReceipt extends Entity {
     private final UUID claimOwner;
     private final long claimFence;
     private final Instant leaseUntil;
+    private final String blockedReason;
     public CaptureReceipt(UUID id, CaptureScope scope, String runId, int runAttempt, String correlationId,
             UUID snapshotMessageId, UUID evidenceMessageId, String phase, UUID observationId,
             UUID claimOwner, long claimFence, Instant leaseUntil) {
+        this(id, scope, runId, runAttempt, correlationId, snapshotMessageId, evidenceMessageId, phase, observationId,
+                claimOwner, claimFence, leaseUntil, null);
+    }
+    public CaptureReceipt(UUID id, CaptureScope scope, String runId, int runAttempt, String correlationId,
+            UUID snapshotMessageId, UUID evidenceMessageId, String phase, UUID observationId,
+            UUID claimOwner, long claimFence, Instant leaseUntil, String blockedReason) {
         super(id); this.scope = scope; this.runId = runId; this.runAttempt = runAttempt;
         this.correlationId = correlationId; this.snapshotMessageId = snapshotMessageId;
         this.evidenceMessageId = evidenceMessageId; this.phase = phase; this.observationId = observationId;
         this.claimOwner = claimOwner; this.claimFence = claimFence; this.leaseUntil = leaseUntil;
+        this.blockedReason = blockedReason;
     }
     public void requireClaim(UUID owner, long fence, Instant now) {
         if (!"ACCEPTED".equals(phase) || !owner.equals(claimOwner) || fence != claimFence
@@ -42,6 +50,8 @@ public final class CaptureReceipt extends Entity {
         }
     }
     public CaptureScope scope() { return scope; }
+    /** Why a BLOCKED receipt stopped: SCOPE_CHANGED or SOURCE_EXPIRED; null in every other phase. */
+    public String blockedReason() { return blockedReason; }
     public String runId() { return runId; }
     public int runAttempt() { return runAttempt; }
     public String correlationId() { return correlationId; }

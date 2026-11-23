@@ -88,5 +88,11 @@ class GitHubAnalysisHandlerTests {
         var blocked = handler.status(DISCOVER, TARGET, Instant.now().minusSeconds(1), () -> {}).orElseThrow();
         assertEquals("BLOCKED", blocked.phase());
         assertEquals("SCOPE_CHANGED", blocked.blockedReason());
+        var expired = new CaptureReceipt(UUID.randomUUID(), SCOPE, "7001", 2, "corr", UUID.randomUUID(), UUID.randomUUID(),
+                "BLOCKED", null, null, 0, null, "SOURCE_EXPIRED");
+        when(capture.find(SCOPE, "7001", 2)).thenReturn(Optional.of(expired));
+        var gone = handler.status(DISCOVER, TARGET, Instant.now().minusSeconds(1), () -> {}).orElseThrow();
+        assertEquals("BLOCKED", gone.phase());
+        assertEquals("SOURCE_EXPIRED", gone.blockedReason());
     }
 }
