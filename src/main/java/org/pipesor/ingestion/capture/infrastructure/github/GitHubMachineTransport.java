@@ -144,8 +144,19 @@ public final class GitHubMachineTransport implements GitHubMachineCapture {
         var bindable = new HashMap<String,String>();
         var systemLogs = new HashSet<String>();
         var labelledLogs = new HashSet<String>();
+        // Jobs may share a display name (and so an archive directory). A job without steps never ran and writes no
+        // member, so among same-named jobs only those with steps can own the directory. Exactly one owner keeps it
+        // attributable; several leave the name ambiguous, and any member under it is then rejected as unknown.
+        var named = new HashMap<String,Integer>();
+        var owners = new HashMap<String,Integer>();
+        for (var job : run.jobs()) {
+            String directory = archiveJobDirectory(job.name());
+            named.merge(directory, 1, Integer::sum);
+            if (!job.steps().isEmpty()) owners.merge(directory, 1, Integer::sum);
+        }
         for(var job:run.jobs()){
             String directory = archiveJobDirectory(job.name());
+            if (named.get(directory) > 1 && (job.steps().isEmpty() || owners.getOrDefault(directory, 0) > 1)) continue;
             if (!jobs.add(directory)) throw new CaptureFailure(UNAVAILABLE);
             if (directory.equals(job.name())) { bindable.put(directory, job.id()); }
             systemLogs.add(directory + "/system.txt");
