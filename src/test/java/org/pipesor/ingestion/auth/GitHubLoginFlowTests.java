@@ -14,13 +14,19 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.api.io.TempDir;
 import org.pipesor.ingestion.auth.application.commandhandlers.GitHubLoginHandler;
 import org.pipesor.ingestion.auth.application.commands.LoginCommands;
+import org.pipesor.ingestion.auth.application.ports.ConsentRecords;
 import org.pipesor.ingestion.auth.application.ports.GitHubLoginDirectory;
 import org.pipesor.ingestion.auth.application.ports.SessionIssuer;
+import org.pipesor.ingestion.auth.application.queries.CurrentConsentQuery;
+import org.pipesor.ingestion.auth.application.queryhandlers.LoginConsentQueryHandler;
 import org.pipesor.ingestion.auth.application.services.LoginFailure;
+import org.pipesor.ingestion.auth.infrastructure.persistence.JdbcConsentRecords;
 import org.pipesor.ingestion.auth.infrastructure.persistence.JdbcLoginAttempts;
+import org.pipesor.ingestion.auth.infrastructure.persistence.SpringLoginTransactions;
 import org.pipesor.ingestion.configuration.TestConnectionConfiguration;
 import org.pipesor.ingestion.github.application.commandhandlers.RefreshHandler;
 import org.pipesor.ingestion.github.application.ports.ConnectionStatusReader;
@@ -56,6 +62,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class GitHubLoginFlowTests {
     private static final UUID TENANT = PlatformTestIdentity.TENANT;
     private static final RepositoryTarget REPOSITORY = new RepositoryTarget("480", "360");
+    private static final String VERSION = "2026-11-24";
     private static PostgreSQLContainer postgres;
     private static ConfigurableApplicationContext context;
     private static final MutableClock CLOCK = new MutableClock();
@@ -99,6 +106,11 @@ class GitHubLoginFlowTests {
     private GitHubLoginHandler login;
     private ConnectedGitHubLink links;
     private ConnectionStatusReader statuses;
+    private JdbcTemplate jdbc;
+    private Path custodyDirectory;
+    private JdbcConsentRecords records;
+    /** Set by a test to fail the consent write after the handoff statement ran in the same transaction. */
+    private volatile boolean failConsentWrite;
     private final List<URI> authorizeUrls = new ArrayList<>();
 
     @BeforeAll static void start() {
@@ -116,7 +128,7 @@ class GitHubLoginFlowTests {
     @BeforeEach void compose(@TempDir Path directory) throws Exception {
         CLOCK.offset = Duration.ZERO;
         github = new GitHub();
-        var custodyDirectory = directory.resolve("custody");
+        custodyDirectory = directory.resolve("custody");
         var custody = new FileCredentialCustody(custodyDirectory, 24000);
         assertEquals(PosixFilePermissions.fromString("rwx------"), Files.getPosixFilePermissions(custodyDirectory));
         var connections = context.getBean(GitHubConnections.class);
@@ -126,14 +138,26 @@ class GitHubLoginFlowTests {
         var sessionKey = PlatformTestIdentity.rsa();
         var tokens = new SessionTokens(TENANT, PlatformTestIdentity.key(sessionKey), Duration.ofHours(1), CLOCK);
         SessionIssuer issuer = id -> { var token = tokens.issue(id); return new SessionIssuer.Issued(token.value(), token.expiresAt()); };
-        login = new GitHubLoginHandler(TENANT, new JdbcLoginAttempts(new JdbcTemplate(context.getBean(DataSource.class))),
+        jdbc = new JdbcTemplate(context.getBean(DataSource.class));
+        records = new JdbcConsentRecords(jdbc);
+        failConsentWrite = false;
+        ConsentRecords consents = new ConsentRecords() {
+            @Override public void append(NewRecord record) {
+                records.append(record);
+                if (failConsentWrite) throw new org.springframework.dao.DataAccessResourceFailureException("synthetic");
+            }
+            @Override public Optional<Recorded> recordedBy(UUID loginAttemptId) { return records.recordedBy(loginAttemptId); }
+            @Override public Optional<Recorded> latest(ConnectionIdentity principal) { return records.latest(principal); }
+        };
+        login = new GitHubLoginHandler(TENANT, new JdbcLoginAttempts(jdbc),
                 (state, challenge) -> { var uri = URI.create("https://github.com/login/oauth/authorize?state=" + state + "&code_challenge=" + challenge); authorizeUrls.add(uri); return uri; },
-                github, github, custody, connections, statuses, issuer, CLOCK);
+                github, github, custody, connections, statuses, issuer, consents,
+                new SpringLoginTransactions(context.getBean(PlatformTransactionManager.class)), CLOCK);
         links = new ConnectedGitHubLink(statuses, snapshots, custody, new RefreshHandler(connections, snapshots, custody, github, CLOCK), CLOCK);
     }
 
     @Test void completesTheLoginOnceAndLinksTheVerifiedUserThroughCustody() throws Exception {
-        var authorize = login.start(new LoginCommands.Start("/pipelines", "corr-login"));
+        var authorize = login.start(new LoginCommands.Start("/pipelines", VERSION, "corr-login"));
         var state = query(authorize, "state");
         var handoff = login.callback(new LoginCommands.Callback("synthetic-code", state, null, "corr-login"));
         assertEquals(base64(MessageDigest.getInstance("SHA-256").digest(github.verifier.getBytes(StandardCharsets.US_ASCII))), query(authorize, "code_challenge"));
@@ -193,13 +217,13 @@ class GitHubLoginFlowTests {
     }
 
     @Test void refusesDeniedConsentExpiredAttemptsAndForgedValues() {
-        var denied = query(login.start(new LoginCommands.Start("/", "corr")), "state");
+        var denied = query(login.start(new LoginCommands.Start("/", VERSION, "corr")), "state");
         assertEquals(LoginFailure.Reason.ACCESS_DENIED, assertThrows(LoginFailure.class,
                 () -> login.callback(new LoginCommands.Callback(null, denied, "access_denied", "corr"))).reason());
         github.reject = true;
         assertEquals(LoginFailure.Reason.ACCESS_DENIED, assertThrows(LoginFailure.class, this::callback).reason());
         github.reject = false;
-        var late = query(login.start(new LoginCommands.Start("/", "corr")), "state");
+        var late = query(login.start(new LoginCommands.Start("/", VERSION, "corr")), "state");
         CLOCK.offset = Duration.ofMinutes(11);
         assertEquals(LoginFailure.Reason.INVALID_STATE, assertThrows(LoginFailure.class,
                 () -> login.callback(new LoginCommands.Callback("code", late, null, "corr"))).reason());
@@ -209,17 +233,145 @@ class GitHubLoginFlowTests {
         assertEquals(LoginFailure.Reason.INVALID_HANDOFF, assertThrows(LoginFailure.class,
                 () -> login.exchange(new LoginCommands.Exchange(handoff))).reason());
         assertEquals(LoginFailure.Reason.INVALID_REQUEST, assertThrows(LoginFailure.class,
-                () -> login.start(new LoginCommands.Start("//evil.example", "corr"))).reason());
+                () -> login.start(new LoginCommands.Start("//evil.example", VERSION, "corr"))).reason());
         assertEquals(LoginFailure.Reason.INVALID_STATE, assertThrows(LoginFailure.class,
                 () -> login.callback(new LoginCommands.Callback("code", "forged", null, "corr"))).reason());
         assertEquals(LoginFailure.Reason.INVALID_HANDOFF, assertThrows(LoginFailure.class,
                 () -> login.exchange(new LoginCommands.Exchange("forged"))).reason());
     }
 
+    @Test void startRequiresOneValidConsentVersionBeforeAnyAttemptOrGitHubCall() throws Exception {
+        var today = LocalDate.now(ZoneOffset.UTC);
+        int attempts = attemptCount();
+        var invalid = new ArrayList<String>(Arrays.asList(null, "", " ", "2026-1-24", "2026-11-24 ", "2026-02-30", "2026-13-01",
+                "24/11/2026", "20261124", "+2026-11-24", "2026-11-24T00:00:00Z", "２０２６-11-24", today.plusDays(2).toString()));
+        for (var value : invalid) {
+            assertEquals(LoginFailure.Reason.CONSENT_REQUIRED, assertThrows(LoginFailure.class,
+                    () -> login.start(new LoginCommands.Start("/pipelines", value, "corr-consent"))).reason(), String.valueOf(value));
+        }
+        // Consent is checked before return_to: an invalid path without consent still asks for consent.
+        assertEquals(LoginFailure.Reason.CONSENT_REQUIRED, assertThrows(LoginFailure.class,
+                () -> login.start(new LoginCommands.Start("//evil.example", null, "corr-consent"))).reason());
+        assertEquals(attempts, attemptCount());
+        assertTrue(authorizeUrls.isEmpty());
+        assertEquals(0, github.exchanges.get());
+        try (var files = Files.list(custodyDirectory)) { assertEquals(0, files.count()); }
+
+        var tomorrow = today.plusDays(1);
+        var state = query(login.start(new LoginCommands.Start("/pipelines", tomorrow.toString(), "corr-consent")), "state");
+        assertEquals(tomorrow, attempt(state).get("consent_version"));
+        assertEquals(attempts + 1, attemptCount());
+    }
+
+    @Test void recordsConsentWithTheHandoffAndReturnsItWithTheSession() throws Exception {
+        var state = query(login.start(new LoginCommands.Start("/pipelines", VERSION, "corr-consent")), "state");
+        var attempt = attempt(state);
+        assertEquals(LocalDate.parse(VERSION), attempt.get("consent_version"));
+        var handoff = login.callback(new LoginCommands.Callback("synthetic-code", state, null, "corr-callback"));
+
+        var rows = jdbc.queryForList("select * from ingestion.consent_records where login_attempt_id = ?", attempt.get("id"));
+        assertEquals(1, rows.size());
+        var row = rows.getFirst();
+        assertEquals(TENANT, row.get("tenant_id"));
+        assertEquals(PlatformIds.human(42), row.get("entra_object_id"));
+        assertEquals("42", row.get("github_user_id"));
+        assertEquals(java.sql.Date.valueOf(VERSION), row.get("documents_version"));
+        var acceptedAt = ((java.sql.Timestamp) row.get("accepted_at")).toInstant();
+        assertEquals(((java.sql.Timestamp) attempt.get("created_at")).toInstant(), acceptedAt);
+        assertFalse(((java.sql.Timestamp) row.get("recorded_at")).toInstant().isBefore(acceptedAt));
+        assertEquals("LOGIN_CHECKBOX", row.get("source"));
+        assertEquals("corr-consent", row.get("correlation_id"));
+        assertNull(row.get("revoked_at"));
+        assertNull(row.get("revocation_reference"));
+
+        var session = login.exchange(new LoginCommands.Exchange(handoff));
+        assertEquals(LocalDate.parse(VERSION), session.consent().documentsVersion());
+        assertEquals(acceptedAt, session.consent().acceptedAt());
+        assertEquals(ConsentRecords.Source.LOGIN_CHECKBOX, session.consent().source());
+        var current = new LoginConsentQueryHandler(records).current(new CurrentConsentQuery(new ConnectionIdentity(TENANT, PlatformIds.human(42))));
+        assertEquals(acceptedAt, current.orElseThrow().acceptedAt());
+    }
+
+    @Test void failedCallbacksRecordNoConsentAndAConsentWriteFailureRollsBackTheHandoff() throws Exception {
+        int records = consentCount();
+        var denied = query(login.start(new LoginCommands.Start("/", VERSION, "corr")), "state");
+        assertEquals(LoginFailure.Reason.ACCESS_DENIED, assertThrows(LoginFailure.class,
+                () -> login.callback(new LoginCommands.Callback(null, denied, "access_denied", "corr"))).reason());
+        assertEquals(records, consentCount());
+
+        failConsentWrite = true;
+        var state = query(login.start(new LoginCommands.Start("/", VERSION, "corr")), "state");
+        assertEquals(LoginFailure.Reason.UNAVAILABLE, assertThrows(LoginFailure.class,
+                () -> login.callback(new LoginCommands.Callback("synthetic-code", state, null, "corr"))).reason());
+        var attempt = attempt(state);
+        assertEquals("FAILED", attempt.get("phase"));
+        assertNull(attempt.get("handoff_digest"));
+        assertEquals(records, consentCount());
+    }
+
+    @Test void consentRecordsAreAppendOnlyExceptOneManualRevocation() throws Exception {
+        var state = query(login.start(new LoginCommands.Start("/", VERSION, "corr")), "state");
+        login.exchange(new LoginCommands.Exchange(login.callback(new LoginCommands.Callback("synthetic-code", state, null, "corr"))));
+        var id = jdbc.queryForObject("select id from ingestion.consent_records where login_attempt_id = ?", UUID.class, attempt(state).get("id"));
+        var queries = new LoginConsentQueryHandler(records);
+        var principal = new CurrentConsentQuery(new ConnectionIdentity(TENANT, PlatformIds.human(42)));
+        assertTrue(queries.current(principal).isPresent());
+
+        for (var forbidden : List.of("update ingestion.consent_records set documents_version = date '2026-01-01' where id = ?",
+                "update ingestion.consent_records set correlation_id = 'other' where id = ?",
+                "update ingestion.consent_records set revoked_at = now() where id = ?",
+                "update ingestion.consent_records set revoked_at = now(), revocation_reference = 'REQ-1', source = 'LOGIN_CHECKBOX', github_user_id = '43' where id = ?",
+                "delete from ingestion.consent_records where id = ?")) {
+            rejected("append-only", () -> jdbc.update(forbidden, id));
+        }
+        rejected("consent_records_revocation_ck",
+                () -> jdbc.update("update ingestion.consent_records set revoked_at = now(), revocation_reference = ' ' where id = ?", id));
+
+        assertEquals(1, jdbc.update("update ingestion.consent_records set revoked_at = now(), revocation_reference = 'REQ-2026-001' "
+                + "where id = ? and revoked_at is null", id));
+        assertTrue(queries.current(principal).isEmpty());
+        assertTrue(records.recordedBy((UUID) attempt(state).get("id")).orElseThrow().revoked());
+
+        for (var forbidden : List.of("update ingestion.consent_records set revoked_at = now(), revocation_reference = 'REQ-2026-002' where id = ?",
+                "update ingestion.consent_records set revoked_at = null, revocation_reference = null where id = ?",
+                "delete from ingestion.consent_records where id = ?")) {
+            rejected("append-only", () -> jdbc.update(forbidden, id));
+        }
+        rejected("append-only", () -> jdbc.execute("truncate ingestion.consent_records"));
+        assertEquals("REQ-2026-001", jdbc.queryForObject("select revocation_reference from ingestion.consent_records where id = ?", String.class, id));
+
+        // Attempts created from now on must carry the version, even when written outside the handler.
+        rejected("consent version", () -> jdbc.update("""
+                insert into ingestion.github_login_attempts (id, state_digest, pkce_secret_object_ref, pkce_secret_version_ref,
+                  return_path, phase, expires_at, correlation_id, created_at, updated_at)
+                select x, sha256(x::text::bytea), 'pkce:' || x, 'v1', '/', 'READY', now() + interval '10 minutes', 'corr', now(), now()
+                from (select gen_random_uuid() as x) ids"""));
+
+        // A new sign-in records consent again and becomes the current one.
+        complete();
+        assertTrue(queries.current(principal).isPresent());
+    }
+
+    private static void rejected(String reason, Executable statement) {
+        var failure = assertThrows(org.springframework.dao.DataAccessException.class, statement);
+        assertTrue(String.valueOf(failure.getMostSpecificCause().getMessage()).contains(reason), failure.getMostSpecificCause().getMessage());
+    }
+
+    private int attemptCount() { return jdbc.queryForObject("select count(*) from ingestion.github_login_attempts", Integer.class); }
+
+    private int consentCount() { return jdbc.queryForObject("select count(*) from ingestion.consent_records", Integer.class); }
+
+    private Map<String, Object> attempt(String state) throws Exception {
+        var digest = MessageDigest.getInstance("SHA-256").digest(state.getBytes(StandardCharsets.US_ASCII));
+        var row = new HashMap<>(jdbc.queryForMap("select * from ingestion.github_login_attempts where state_digest = ?", (Object) digest));
+        row.computeIfPresent("consent_version", (key, value) -> ((java.sql.Date) value).toLocalDate());
+        return row;
+    }
+
     private void complete() { login.exchange(new LoginCommands.Exchange(callback())); }
 
     private String callback() {
-        var state = query(login.start(new LoginCommands.Start("/", "corr")), "state");
+        var state = query(login.start(new LoginCommands.Start("/", VERSION, "corr")), "state");
         return login.callback(new LoginCommands.Callback("synthetic-code", state, null, "corr"));
     }
 

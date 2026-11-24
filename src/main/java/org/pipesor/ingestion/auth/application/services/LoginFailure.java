@@ -2,7 +2,7 @@ package org.pipesor.ingestion.auth.application.services;
 
 /** Fixed login outcomes; provider messages, codes and tokens never cross this boundary. */
 public final class LoginFailure extends RuntimeException {
-    public enum Reason { INVALID_REQUEST, INVALID_STATE, ACCESS_DENIED, INVALID_HANDOFF, UNAVAILABLE }
+    public enum Reason { INVALID_REQUEST, CONSENT_REQUIRED, INVALID_STATE, ACCESS_DENIED, INVALID_HANDOFF, UNAVAILABLE }
 
     private final Reason reason;
 

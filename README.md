@@ -245,8 +245,8 @@ Flyway migrates schema `ingestion` at startup (`ddl-auto: validate`). Actuator e
 | Route | Caller |
 |---|---|
 | `GET /actuator/health/liveness`, `GET /actuator/health/readiness`, `GET /.well-known/jwks.json` (workload and session keys) | unauthenticated |
-| `GET /api/v1/auth/github/start?return_to=`, `GET /api/v1/auth/github/callback`, `POST /api/v1/auth/session` | unauthenticated (login flow) |
-| `POST /api/v1/auth/logout`, `/api/v1/github/connection`, `/api/v1/github/repositories`, `…/{repositoryId}/workflows`, `…/{repositoryId}/collaborators`, `…/workflows/{workflowId}/runs?conclusion=failure`, `POST`/`GET …/runs/{runId}/attempts/{attempt}/analysis` | session token, scope `GitHub.Self` |
+| `GET /api/v1/auth/github/start?return_to=&consent_version=`, `GET /api/v1/auth/github/callback`, `POST /api/v1/auth/session` | unauthenticated (login flow) |
+| `POST /api/v1/auth/logout`, `GET /api/v1/auth/consent`, `/api/v1/github/connection`, `/api/v1/github/repositories`, `…/{repositoryId}/workflows`, `…/{repositoryId}/collaborators`, `…/workflows/{workflowId}/runs?conclusion=failure`, `POST`/`GET …/runs/{runId}/attempts/{attempt}/analysis` | session token, scope `GitHub.Self` |
 | `POST /internal/v1/github/access-verifications`, `POST /internal/v1/github/workflow-verifications` | `pipeline` workload, `Pipeline.GitHubFacts.Read`, plus `X-Pipesor-Subject-Token` |
 | `POST /internal/v1/capture/machine-scope-checks` | `pipeline` workload, `Pipeline.MachineScope.Check` |
 | `PUT /internal/v1/capture/workflow-scopes/{repositoryId}/{workflowId}` | `pipeline` workload, `Pipeline.CaptureScope.Write` (ADR-023) |
@@ -271,7 +271,25 @@ java -jar target/pipesor-ingestion-normalization-service-*.jar --spring.main.web
 The import is an idempotent upsert; existing machine scopes keep their reviewed scope revision so evidence captured
 earlier stays verifiable.
 
-Login: `start` creates a one-time attempt (state digest, PKCE S256 verifier in custody, 10 min) and redirects to GitHub. The `callback` consumes it once, exchanges the code, verifies the GitHub user (any GitHub user who authorizes the App may sign in, ADR-025; repository access is checked per repository on every read and command, and repositories are admitted per ADR-024), stores the user token pair in custody through the ADR-020 connection model and redirects to `<dashboard>/auth/complete?handoff=<one-time value>` (60 s) or `?error=<invalid_state|access_denied|unavailable>`. `POST /api/v1/auth/session` returns `{accessToken, expiresAt, user: {githubUserId, login}, returnTo}`; the session lasts at most one hour. The analysis status returns Pipeline's deterministic `executionId`/`incidentId` once published.
+Login: `start` requires `consent_version`, the version of the Privacy Policy and Terms of Use (one shared version, an ISO date such as `2026-11-24`) the person accepted with the sign-in checkbox, which also accepts the transfer of their data to the United States ([ADR-029](https://github.com/pipesor-org/pipesor-docs/blob/main/docs/architecture/decisions/ADR-029-login-consent-record.md); Ley 29733, D.S. 016-2024-JUS arts. 4 and 9). It must appear exactly once and be a valid `YYYY-MM-DD` calendar date no later than tomorrow (UTC); otherwise (missing, empty, malformed, repeated or future) `start` redirects to `<dashboard>/auth/complete?error=consent_required` without creating an attempt or contacting GitHub. With a valid version, `start` creates a one-time attempt (state digest, PKCE S256 verifier in custody, 10 min) that stores the version, with the attempt's creation time as the acceptance time, and redirects to GitHub; an invalid `return_to` stays `400 INVALID_REQUEST`. The `callback` consumes it once, exchanges the code, verifies the GitHub user (any GitHub user who authorizes the App may sign in, ADR-025; repository access is checked per repository on every read and command, and repositories are admitted per ADR-024), stores the user token pair in custody through the ADR-020 connection model and, in the same database transaction that offers the handoff, appends one row to `ingestion.consent_records`. It then redirects to `<dashboard>/auth/complete?handoff=<one-time value>` (60 s) or `?error=<invalid_state|access_denied|consent_required|unavailable>`; if the consent record cannot be written the login fails with `unavailable` (no login without proof), and a failed callback records nothing. `POST /api/v1/auth/session` returns `{accessToken, expiresAt, user: {githubUserId, login}, returnTo, consent: {documentsVersion, acceptedAt}}`, where `consent` is the record written by the login that produced the handoff; the session lasts at most one hour. `GET /api/v1/auth/consent` (session, `GitHub.Self`, `Cache-Control: no-store`) returns `200 {documentsVersion, acceptedAt, source: "LOGIN_CHECKBOX"}` for the caller's most recent record if it is not revoked, otherwise `404 CONSENT_NOT_FOUND`; the dashboard asks for consent again when its current documents are newer. The analysis status returns Pipeline's deterministic `executionId`/`incidentId` once published.
+
+### Login consent records
+
+`ingestion.consent_records` (Flyway V6) holds one row per successful login: `id`, `tenant_id`, `entra_object_id` (the principal object id, `PlatformIds.human(githubUserId)`, as in `github_connections`), `github_user_id`, `documents_version`, `accepted_at` (the attempt's creation time), `recorded_at`, `source` (`LOGIN_CHECKBOX`), `login_attempt_id` (unique, references `github_login_attempts`), `correlation_id`, `revoked_at` and `revocation_reference`. A trigger makes the table append-only: `DELETE`, `TRUNCATE` and every `UPDATE` are rejected except the single revocation that sets `revoked_at` and `revocation_reference` from `NULL` with every other column unchanged. The login attempt keeps `consent_version` too; it is `NULL` only on attempts created before V6, and an insert trigger rejects new attempts without it. Logs carry only the failure reason and correlation id, never the version or the record identifiers.
+
+**Manual revocation (MVP).** Requests arrive by email. An operator with database administrator rights records the revocation, using the request's reference, for the person's tenant and principal object id (`PlatformIds.human(<GitHub user id>)`):
+
+```sql
+UPDATE ingestion.consent_records
+SET revoked_at = now(), revocation_reference = '<request reference>'
+WHERE tenant_id = '<tenant id>' AND entra_object_id = '<principal object id>' AND revoked_at IS NULL;
+```
+
+The operator must also disconnect the person's GitHub link, since revocation does not stop other processing by itself. Ingestion has no operator route for that yet: the link generation is invalidated by the person's logout or `DELETE /api/v1/github/connection`, and GitHub stops honoring it when the person revokes the App's authorization in their GitHub settings; record in the request which of these was done. From then on `GET /api/v1/auth/consent` answers `404 CONSENT_NOT_FOUND` and the next sign-in records consent again. A second revocation of the same row is rejected.
+
+**Retention:** consent records are kept while the person has data in Pipesor and up to 1 year after revoking consent or after their last access, so that the consent can be proved (ADR-029). The period is documented; no purge is implemented.
+
+**Deployment order:** deploy the dashboard that sends `consent_version` *before* this Ingestion version. Earlier Ingestion versions ignore the parameter, so the new dashboard is safe first; the reverse order makes every login fail with `consent_required`. Attempts started before the upgrade (no version) also end with `consent_required`.
 
 ## Local login walkthrough
 
@@ -287,6 +305,6 @@ Login: `start` creates a one-time attempt (state digest, PKCE S256 verifier in c
    ```
 
 3. Check `curl http://127.0.0.1:8081/actuator/health/readiness` and `curl http://127.0.0.1:8081/.well-known/jwks.json` (two keys).
-4. Open the dashboard at `http://127.0.0.1:5173` and log in; it calls `GET /api/v1/auth/github/start`, GitHub redirects back to the callback, and the dashboard exchanges the handoff at `POST /api/v1/auth/session`. Tokens, codes and handoff values are never logged.
+4. Open the dashboard at `http://127.0.0.1:5173`, tick the Privacy Policy and Terms of Use box and log in; it calls `GET /api/v1/auth/github/start?return_to=…&consent_version=…`, GitHub redirects back to the callback, and the dashboard exchanges the handoff at `POST /api/v1/auth/session`. Tokens, codes and handoff values are never logged.
 
 The user's GitHub token is refreshed server-side when it is within five minutes of expiry; logout invalidates the link generation (custody cleanup operations stay pending, as in DD-020).

@@ -5,7 +5,8 @@ import org.pipesor.ingestion.github.domain.model.valueobjects.ConnectionIdentity
 /** Login commands built by the HTTP boundary; constructing them authenticates nothing. */
 public final class LoginCommands {
     private LoginCommands() { }
-    public record Start(String returnPath, String correlationId) { }
+    /** {@code consentVersion} is the raw, single {@code consent_version} value, or null when absent or repeated. */
+    public record Start(String returnPath, String consentVersion, String correlationId) { }
     public record Callback(String code, String state, String error, String correlationId) {
         @Override public String toString() { return "Callback[private]"; }
     }

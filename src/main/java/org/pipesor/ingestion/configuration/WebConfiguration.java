@@ -26,6 +26,7 @@ public class WebConfiguration {
                 routes.requestMatchers(HttpMethod.GET, "/api/v1/auth/github/start", "/api/v1/auth/github/callback").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/session").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/logout").access(PlatformAuthorities.session(GITHUB_SELF))
+                        .requestMatchers(HttpMethod.GET, "/api/v1/auth/consent").access(PlatformAuthorities.session(GITHUB_SELF))
                         .requestMatchers("/api/v1/github/**").access(PlatformAuthorities.session(GITHUB_SELF))
                         .requestMatchers(HttpMethod.POST, "/internal/v1/github/**")
                         .access(PlatformAuthorities.workload("pipeline", "Pipeline.GitHubFacts.Read"))
