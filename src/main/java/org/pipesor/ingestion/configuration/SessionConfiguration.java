@@ -4,12 +4,18 @@ import com.azure.identity.DefaultAzureCredentialBuilder;
 import java.time.Clock;
 import java.util.List;
 import org.pipesor.ingestion.auth.application.commandhandlers.GitHubLoginHandler;
+import org.pipesor.ingestion.auth.application.ports.ConsentRecords;
 import org.pipesor.ingestion.auth.application.ports.GitHubAuthorization;
 import org.pipesor.ingestion.auth.application.ports.LoginAttempts;
+import org.pipesor.ingestion.auth.application.ports.LoginTransactions;
 import org.pipesor.ingestion.auth.application.ports.SessionIssuer;
+import org.pipesor.ingestion.auth.application.queryhandlers.LoginConsentQueryHandler;
 import org.pipesor.ingestion.auth.application.services.GitHubLogin;
+import org.pipesor.ingestion.auth.application.services.LoginConsentQueries;
 import org.pipesor.ingestion.auth.infrastructure.github.GitHubAuthorizeUrls;
+import org.pipesor.ingestion.auth.infrastructure.persistence.JdbcConsentRecords;
 import org.pipesor.ingestion.auth.infrastructure.persistence.JdbcLoginAttempts;
+import org.pipesor.ingestion.auth.infrastructure.persistence.SpringLoginTransactions;
 import org.pipesor.ingestion.github.application.ports.ConnectionStatusReader;
 import org.pipesor.ingestion.github.application.ports.GitHubCredentialCustody;
 import org.pipesor.ingestion.github.application.ports.GitHubUserTokens;
@@ -27,6 +33,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -58,6 +65,15 @@ public class SessionConfiguration {
     LoginAttempts loginAttempts(JdbcTemplate jdbc) { return new JdbcLoginAttempts(jdbc); }
 
     @Bean
+    ConsentRecords consentRecords(JdbcTemplate jdbc) { return new JdbcConsentRecords(jdbc); }
+
+    @Bean
+    LoginTransactions loginTransactions(PlatformTransactionManager transactions) { return new SpringLoginTransactions(transactions); }
+
+    @Bean
+    LoginConsentQueries loginConsentQueries(ConsentRecords records) { return new LoginConsentQueryHandler(records); }
+
+    @Bean
     GitHubAuthorization githubAuthorization(GitHubProperties github, TransportPolicy transport, GitHubAppClientId clientId) {
         return new GitHubAuthorizeUrls(transport.require(github.webBaseUrl()), transport.require(github.callbackUrl()), clientId);
     }
@@ -66,13 +82,13 @@ public class SessionConfiguration {
     GitHubLogin githubLogin(PlatformSecurityProperties platform, LoginAttempts attempts, GitHubAuthorization authorization,
             GitHubUserTokens tokens, GitHubReadProvider directory,
             GitHubCredentialCustody custody, GitHubConnections connections, ConnectionStatusReader statuses,
-            SessionTokens sessions, Clock clock) {
+            SessionTokens sessions, ConsentRecords consents, LoginTransactions transactions, Clock clock) {
         SessionIssuer issuer = githubUserId -> {
             var token = sessions.issue(githubUserId);
             return new SessionIssuer.Issued(token.value(), token.expiresAt());
         };
         return new GitHubLoginHandler(platform.tenantId(), attempts, authorization, tokens, directory, custody,
-                connections, statuses, issuer, clock);
+                connections, statuses, issuer, consents, transactions, clock);
     }
 
     /** CORS for the configured dashboard origin only, no credentials mode (MVP HTTP API conventions). */

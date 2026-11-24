@@ -7,11 +7,16 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeParseException;
 import java.util.Base64;
 import java.util.Objects;
 import java.util.UUID;
 import org.pipesor.ingestion.auth.application.commands.LoginCommands.*;
 import org.pipesor.ingestion.auth.application.ports.*;
+import org.pipesor.ingestion.auth.application.queries.LoginConsent;
 import org.pipesor.ingestion.auth.application.services.GitHubLogin;
 import org.pipesor.ingestion.auth.application.services.LoginFailure;
 import org.pipesor.ingestion.github.application.commands.ConnectionCommands;
@@ -33,7 +38,9 @@ import static org.pipesor.ingestion.auth.application.services.LoginFailure.Reaso
 /**
  * Server-side GitHub App user authorization with one-time state and PKCE S256 (ADR-020, ADR-022).
  * The callback links the verified GitHub user through the ADR-020 connection model (attempt,
- * generation, custody) before a one-time handoff can be exchanged for a session token.
+ * generation, custody) before a one-time handoff can be exchanged for a session token. The start
+ * requires the consent version accepted on the sign-in screen, and a successful callback appends the
+ * consent record in the transaction that offers the handoff (ADR-029).
  */
 public final class GitHubLoginHandler implements GitHubLogin {
     static final Duration ATTEMPT_LIFETIME = Duration.ofMinutes(10);
@@ -41,12 +48,15 @@ public final class GitHubLoginHandler implements GitHubLogin {
     private static final Duration MAX_USER_TOKEN_LIFETIME = Duration.ofHours(8).plusMinutes(1);
     private static final String RETURN_PATH = "/(?!/)[A-Za-z0-9/_.~-]{0,255}";
     private static final String OPAQUE = "[A-Za-z0-9_-]{43}";
+    private static final String ISO_DATE = "[0-9]{4}-[0-9]{2}-[0-9]{2}";
 
     private final UUID tenant;
     private final LoginAttempts attempts;
     private final GitHubAuthorization authorization;
     private final GitHubUserTokens tokens;
     private final GitHubLoginDirectory directory;
+    private final ConsentRecords consents;
+    private final LoginTransactions transactions;
     private final GitHubCredentialCustody custody;
     private final GitHubConnections connections;
     private final ConnectionStatusReader statuses;
@@ -56,28 +66,32 @@ public final class GitHubLoginHandler implements GitHubLogin {
 
     public GitHubLoginHandler(UUID tenant, LoginAttempts attempts, GitHubAuthorization authorization, GitHubUserTokens tokens,
             GitHubLoginDirectory directory, GitHubCredentialCustody custody,
-            GitHubConnections connections, ConnectionStatusReader statuses, SessionIssuer sessions, Clock clock) {
+            GitHubConnections connections, ConnectionStatusReader statuses, SessionIssuer sessions,
+            ConsentRecords consents, LoginTransactions transactions, Clock clock) {
         this.tenant = Objects.requireNonNull(tenant); this.attempts = Objects.requireNonNull(attempts);
         this.authorization = Objects.requireNonNull(authorization); this.tokens = Objects.requireNonNull(tokens);
         this.directory = Objects.requireNonNull(directory);
         this.custody = Objects.requireNonNull(custody); this.connections = Objects.requireNonNull(connections);
         this.statuses = Objects.requireNonNull(statuses); this.sessions = Objects.requireNonNull(sessions);
+        this.consents = Objects.requireNonNull(consents); this.transactions = Objects.requireNonNull(transactions);
         this.clock = Objects.requireNonNull(clock);
     }
 
     @Override public URI start(Start command) {
-        if (command == null || command.returnPath() == null || !command.returnPath().matches(RETURN_PATH)
+        if (command == null) { throw new LoginFailure(INVALID_REQUEST); }
+        var now = clock.instant();
+        var consentVersion = consentVersion(command.consentVersion(), now);
+        if (command.returnPath() == null || !command.returnPath().matches(RETURN_PATH)
                 || command.correlationId() == null || command.correlationId().isBlank()) {
             throw new LoginFailure(INVALID_REQUEST);
         }
         var state = opaque(32);
         var verifier = opaque(64);
         var id = UUID.randomUUID();
-        var now = clock.instant();
         try {
             var saved = custody.saveVerifier(SecretReference.pkceObject(id), verifier);
             attempts.create(new LoginAttempts.NewAttempt(id, digest(state), saved, command.returnPath(),
-                    now.plus(ATTEMPT_LIFETIME), command.correlationId(), now));
+                    now.plus(ATTEMPT_LIFETIME), command.correlationId(), now, consentVersion));
             return authorization.authorizeUrl(state, challenge(verifier));
         } catch (RuntimeException unavailable) {
             throw new LoginFailure(UNAVAILABLE);
@@ -92,6 +106,8 @@ public final class GitHubLoginHandler implements GitHubLogin {
         catch (LoginFailure invalid) { throw invalid; }
         catch (RuntimeException unavailable) { throw new LoginFailure(UNAVAILABLE); }
         try {
+            // Attempts started before consent was recorded cannot produce a login (ADR-029).
+            if (claimed.consentVersion() == null) { throw new LoginFailure(CONSENT_REQUIRED); }
             if (command.error() != null || command.code() == null) { throw new LoginFailure(ACCESS_DENIED); }
             var pair = tokens.exchange(new GitHubUserTokens.AuthorizationCode(command.code(), custody.readVerifier(claimed.verifier())));
             if (pair.accessExpiresAt().isAfter(clock.instant().plus(MAX_USER_TOKEN_LIFETIME))) { throw new LoginFailure(UNAVAILABLE); }
@@ -112,8 +128,16 @@ public final class GitHubLoginHandler implements GitHubLogin {
             require(connections.activate(new ConnectionCommands.Activate(connection.connectionId(), claimed.id(),
                     facts.githubUserId(), credential, pair.accessExpiresAt(), pair.refreshExpiresAt())) == Outcome.ACTIVATED);
             var handoff = opaque(32);
-            attempts.offerHandoff(claimed.id(), new LoginAttempts.Handoff(digest(handoff), clock.instant().plus(HANDOFF_LIFETIME),
-                    connection.connectionId(), generationId, facts.githubUserId(), facts.login(), claimed.returnPath()), clock.instant());
+            var now = clock.instant();
+            var offered = new LoginAttempts.Handoff(digest(handoff), now.plus(HANDOFF_LIFETIME),
+                    connection.connectionId(), generationId, facts.githubUserId(), facts.login(), claimed.returnPath());
+            var consent = new ConsentRecords.NewRecord(UUID.randomUUID(), identity, facts.githubUserId(), claimed.consentVersion(),
+                    claimed.createdAt(), now, ConsentRecords.Source.LOGIN_CHECKBOX, claimed.id(), claimed.correlationId());
+            // No login without proof: the handoff and the consent record commit together or not at all.
+            transactions.inTransaction(() -> {
+                attempts.offerHandoff(claimed.id(), offered, now);
+                consents.append(consent);
+            });
             return handoff;
         } catch (RuntimeException failure) {
             try { attempts.fail(claimed.id(), clock.instant()); } catch (RuntimeException ignored) { /* The claim already prevents reuse. */ }
@@ -123,10 +147,11 @@ public final class GitHubLoginHandler implements GitHubLogin {
 
     @Override public Session exchange(Exchange command) {
         if (command == null || command.handoff() == null || !command.handoff().matches(OPAQUE)) { throw new LoginFailure(INVALID_HANDOFF); }
-        LoginAttempts.Handoff handoff;
-        try { handoff = attempts.consumeHandoff(digest(command.handoff()), clock.instant()).orElseThrow(() -> new LoginFailure(INVALID_HANDOFF)); }
+        LoginAttempts.Completed completed;
+        try { completed = attempts.consumeHandoff(digest(command.handoff()), clock.instant()).orElseThrow(() -> new LoginFailure(INVALID_HANDOFF)); }
         catch (LoginFailure invalid) { throw invalid; }
         catch (RuntimeException unavailable) { throw new LoginFailure(UNAVAILABLE); }
+        var handoff = completed.handoff();
         try {
             long githubUserId = Long.parseLong(handoff.githubUserId());
             var current = statuses.find(new ConnectionIdentity(tenant, PlatformIds.human(githubUserId)));
@@ -134,8 +159,11 @@ public final class GitHubLoginHandler implements GitHubLogin {
                     || !handoff.generationId().equals(current.get().activeGenerationId())) {
                 throw new LoginFailure(INVALID_HANDOFF);
             }
+            // Only handoffs offered before consent was recorded lack a record; they cannot become a session.
+            var consent = consents.recordedBy(completed.attemptId()).orElseThrow(() -> new LoginFailure(INVALID_HANDOFF));
             var issued = sessions.issue(githubUserId);
-            return new Session(issued.accessToken(), issued.expiresAt(), handoff.githubUserId(), handoff.login(), handoff.returnPath());
+            return new Session(issued.accessToken(), issued.expiresAt(), handoff.githubUserId(), handoff.login(), handoff.returnPath(),
+                    new LoginConsent(consent.documentsVersion(), consent.acceptedAt(), consent.source()));
         } catch (LoginFailure invalid) { throw invalid; }
         catch (RuntimeException unavailable) { throw new LoginFailure(UNAVAILABLE); }
     }
@@ -164,6 +192,19 @@ public final class GitHubLoginHandler implements GitHubLogin {
         try { connections.create(new ConnectionCommands.Create(UUID.randomUUID(), identity)); }
         catch (ConnectionFailure conflict) { if (conflict.reason() != ConnectionFailure.Reason.CONFLICT) { throw conflict; } }
         return statuses.find(identity).orElseThrow(() -> new LoginFailure(UNAVAILABLE));
+    }
+
+    /**
+     * The single {@code consent_version} value: an ISO calendar date ({@code YYYY-MM-DD}) no later than
+     * tomorrow in UTC. Anything else, including an absent or repeated parameter, is CONSENT_REQUIRED.
+     */
+    static LocalDate consentVersion(String value, Instant now) {
+        if (value == null || !value.matches(ISO_DATE)) { throw new LoginFailure(CONSENT_REQUIRED); }
+        LocalDate version;
+        try { version = LocalDate.parse(value); }
+        catch (DateTimeParseException malformed) { throw new LoginFailure(CONSENT_REQUIRED); }
+        if (version.isAfter(LocalDate.ofInstant(now, ZoneOffset.UTC).plusDays(1))) { throw new LoginFailure(CONSENT_REQUIRED); }
+        return version;
     }
 
     private static LoginFailure translate(RuntimeException failure) {

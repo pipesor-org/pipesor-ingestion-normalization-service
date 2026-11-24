@@ -79,7 +79,7 @@ class WebApplicationCompositionTests {
             assertInstanceOf(ConnectedGitHubLink.class, context.getBean(CurrentGitHubLink.class));
             assertNotNull(context.getBean(GitHubLogin.class));
             assertNotNull(context.getBean(PublicationRunner.class));
-            assertEquals(Integer.valueOf(5), new org.springframework.jdbc.core.JdbcTemplate(context.getBean(javax.sql.DataSource.class))
+            assertEquals(Integer.valueOf(6), new org.springframework.jdbc.core.JdbcTemplate(context.getBean(javax.sql.DataSource.class))
                     .queryForObject("select count(*) from ingestion.flyway_schema_history where success and version is not null", Integer.class));
             var base = URI.create("http://127.0.0.1:" + ((WebServerApplicationContext) context).getWebServer().getPort());
             try (var client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build()) {
@@ -94,13 +94,17 @@ class WebApplicationCompositionTests {
                 var denied = get(client, base, "/api/v1/github/repositories?limit=1");
                 assertEquals(401, denied.statusCode());
                 assertTrue(denied.headers().firstValue("Content-Type").orElseThrow().contains("application/problem+json"));
-                var start = get(client, base, "/api/v1/auth/github/start?return_to=/pipelines");
+                var withoutConsent = get(client, base, "/api/v1/auth/github/start?return_to=/pipelines");
+                assertEquals(302, withoutConsent.statusCode());
+                assertEquals("http://127.0.0.1:5173/auth/complete?error=consent_required", withoutConsent.headers().firstValue("Location").orElseThrow());
+                assertEquals(401, get(client, base, "/api/v1/auth/consent").statusCode());
+                var start = get(client, base, "/api/v1/auth/github/start?return_to=/pipelines&consent_version=2026-11-24");
                 assertEquals(302, start.statusCode(), start.body());
                 var location = start.headers().firstValue("Location").orElseThrow();
                 assertTrue(location.startsWith("https://github.com/login/oauth/authorize?client_id=Iv1.synthetic&redirect_uri="
                         + java.net.URLEncoder.encode("http://127.0.0.1:8081/api/v1/auth/github/callback", java.nio.charset.StandardCharsets.UTF_8)), location);
                 assertTrue(location.contains("&code_challenge_method=S256"));
-                assertEquals(400, get(client, base, "/api/v1/auth/github/start?return_to=https://evil.example").statusCode());
+                assertEquals(400, get(client, base, "/api/v1/auth/github/start?return_to=https://evil.example&consent_version=2026-11-24").statusCode());
                 var callback = get(client, base, "/api/v1/auth/github/callback?code=x&state=" + "A".repeat(43));
                 assertEquals(302, callback.statusCode());
                 assertEquals("http://127.0.0.1:5173/auth/complete?error=invalid_state", callback.headers().firstValue("Location").orElseThrow());
