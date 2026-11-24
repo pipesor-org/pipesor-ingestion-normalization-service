@@ -20,14 +20,21 @@ import org.pipesor.ingestion.shared.interfaces.rest.ApiFailure;
  * each as length-prefixed modified UTF-8 ({@link DataOutputStream#writeUTF}). Keys longer than
  * {@value #MAX_KEY_BYTES} encoded bytes are cut to a prefix, so a token never exceeds {@value #MAX_LENGTH} characters.
  * Decoding is strict: only the canonical encoding of a well-formed token for the same binding is accepted.
+ * <p>
+ * Page-number continuations (GitHub-paged reads such as repository collaborators) use format byte {@code 2}: a
+ * 16-byte check (SHA-256 prefix over the binding and the page) followed by the 1-based page number as an unsigned
+ * big-endian 16-bit integer. The check makes a token for another scope, or with an altered page, invalid.
  */
 public final class DiscoveryPageTokens {
     public static final int MAX_LENGTH = 512;
     static final int MAX_ID_LENGTH = 32;
     static final int MAX_KEY_BYTES = 320;
     private static final int VERSION = 1;
+    private static final int PAGE_FORMAT = 2;
+    private static final int MAX_PAGE = 0xFFFF;
     private static final int BINDING_BYTES = 16;
     private static final String DOMAIN = "pipesor.github.discovery-page.v1";
+    private static final String PAGE_DOMAIN = "pipesor.github.page-number.v1";
     private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
 
     private DiscoveryPageTokens() {}
@@ -40,6 +47,10 @@ public final class DiscoveryPageTokens {
         public static Binding repositories(String subjectRef, String filter) { return of("repositories", subjectRef, filter); }
         public static Binding workflows(String repositoryId, String subjectRef, String filter) {
             return of("repositories/" + repositoryId + "/workflows", subjectRef, filter);
+        }
+        /** A page-number scope: the page size is part of it, since GitHub's page numbers depend on it. */
+        public static Binding collaborators(String repositoryId, String subjectRef, int pageSize) {
+            return of("repositories/" + repositoryId + "/collaborators?pageSize=" + pageSize, subjectRef, null);
         }
         private static Binding of(String scope, String subjectRef, String filter) {
             var bytes = new ByteArrayOutputStream();
@@ -90,6 +101,51 @@ public final class DiscoveryPageTokens {
             if (!MessageDigest.isEqual(digest, binding.digest)) { throw invalid(); }
             return new DiscoveryPage.Position(key, id, flag == 1);
         } catch (IOException | IllegalArgumentException malformed) { throw invalid(); }
+    }
+
+    /** Encodes the 1-based number of a following page (at least 2). */
+    public static String encodePage(int page, Binding binding) {
+        if (page < 2 || page > MAX_PAGE) { throw ApiFailure.unavailable(); }
+        return ENCODER.encodeToString(pagePayload(binding.digest, page));
+    }
+
+    /**
+     * Decodes a page-number continuation: 1 for the first page (no token), otherwise a page from 2 to {@code maxPage}
+     * issued for the same binding; anything else is {@code 400 INVALID_PAGE_TOKEN}.
+     */
+    public static int decodePage(String token, Binding binding, int maxPage) {
+        if (token == null) { return 1; }
+        if (token.isEmpty() || token.length() > MAX_LENGTH || !token.chars().allMatch(DiscoveryPageTokens::alphabet)) { throw invalid(); }
+        byte[] bytes;
+        try { bytes = Base64.getUrlDecoder().decode(token); }
+        catch (IllegalArgumentException malformed) { throw invalid(); }
+        if (!ENCODER.encodeToString(bytes).equals(token) || bytes.length != 1 + BINDING_BYTES + 2
+                || (bytes[0] & 0xFF) != PAGE_FORMAT) { throw invalid(); }
+        int page = (bytes[1 + BINDING_BYTES] & 0xFF) << 8 | bytes[2 + BINDING_BYTES] & 0xFF;
+        if (page < 2 || page > Math.min(maxPage, MAX_PAGE) || !MessageDigest.isEqual(bytes, pagePayload(binding.digest, page))) {
+            throw invalid();
+        }
+        return page;
+    }
+
+    private static byte[] pagePayload(byte[] binding, int page) {
+        var check = new ByteArrayOutputStream();
+        try (var out = new DataOutputStream(check)) {
+            out.writeUTF(PAGE_DOMAIN);
+            out.write(binding);
+            out.writeShort(page);
+        } catch (IOException impossible) { throw new UncheckedIOException(impossible); }
+        var bytes = new ByteArrayOutputStream();
+        try (var out = new DataOutputStream(bytes)) {
+            out.writeByte(PAGE_FORMAT);
+            out.write(Arrays.copyOf(sha256(check.toByteArray()), BINDING_BYTES));
+            out.writeShort(page);
+        } catch (IOException impossible) { throw new UncheckedIOException(impossible); }
+        return bytes.toByteArray();
+    }
+    private static byte[] sha256(byte[] input) {
+        try { return MessageDigest.getInstance("SHA-256").digest(input); }
+        catch (NoSuchAlgorithmException unavailable) { throw new IllegalStateException(unavailable); }
     }
 
     private static byte[] payload(byte[] digest, boolean prefix, String id, String key) {

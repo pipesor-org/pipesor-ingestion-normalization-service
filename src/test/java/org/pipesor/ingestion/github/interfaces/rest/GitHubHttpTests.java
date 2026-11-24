@@ -45,6 +45,7 @@ class GitHubHttpTests {
     private static final String SELF_PATH = "/api/v1/github/repositories?limit=5";
     private static final String REPOSITORIES = "/api/v1/github/repositories";
     private static final String WORKFLOWS = "/api/v1/github/repositories/823001/workflows";
+    private static final String COLLABORATORS = "/api/v1/github/repositories/823001/collaborators";
     private static final String ACCESS_PATH = "/internal/v1/github/access-verifications";
     private static final String FACTS = "Pipeline.GitHubFacts.Read";
     private static final JsonMapper JSON = JsonMapper.builder().build();
@@ -69,7 +70,9 @@ class GitHubHttpTests {
             ApiExceptionHandler.class, JwksController.class})
     static class HttpApplication {
         @Bean @Primary Clock testClock() { return CLOCK; }
-        @Bean GitHubQueries queries() { return new GitHubQueryHandler(PROVIDER::link, request -> observed(request, true), ADMISSIONS, PROVIDER, CLOCK); }
+        @Bean GitHubQueries queries() {
+            return new GitHubQueryHandler(PROVIDER::link, request -> observed(request, true), ADMISSIONS, PROVIDER, PROVIDER::connections, CLOCK);
+        }
         @Bean GitHubRepositorySelection selections() { return PROVIDER::resolve; }
         @Bean GitHubConnectionQueries connectionQueries() {
             return query -> { PROVIDER.statusIdentity = query.identity(); return Optional.of(new ConnectionStatus(CONNECTION, 7, GENERATION, Instant.now(), Instant.now())); };
@@ -90,6 +93,7 @@ class GitHubHttpTests {
         PROVIDER.changeGeneration = false; PROVIDER.linkReads = 0;
         PROVIDER.delay = false; CLOCK.offset = Duration.ZERO;
         PROVIDER.repositoryList = null; PROVIDER.workflowList = null; PROVIDER.installationReads = 0;
+        PROVIDER.administrator = true; PROVIDER.unlinked = false; PROVIDER.collaboratorRequests.clear(); PROVIDER.connectionReads.clear();
         org.mockito.Mockito.reset(context.getBean(GitHubConnections.class));
     }
 
@@ -462,6 +466,118 @@ class GitHubHttpTests {
         assertTrue(workflows.get("nextPageToken").isNull());
     }
 
+    @Test void administratorPagesCollaboratorsWithTheirPipesorLinkState() throws Exception {
+        var session = identity.session(GITHUB_USER);
+        var response = request(base, COLLABORATORS + "?pageSize=2", session, null, Map.of());
+        assertEquals(200, response.statusCode(), response.body());
+        assertEquals("no-store", response.headers().firstValue("Cache-Control").orElseThrow());
+        var first = JSON.readTree(response.body());
+        assertEquals(new TreeSet<>(List.of("repository", "items", "nextPageToken")), fields(first));
+        assertEquals(new TreeSet<>(List.of("repositoryId", "fullName")), fields(first.get("repository")));
+        assertEquals("823001", first.get("repository").get("repositoryId").asString());
+        assertEquals("example/service", first.get("repository").get("fullName").asString());
+        assertEquals(2, first.get("items").size());
+        var octocat = first.get("items").get(0);
+        assertEquals(new TreeSet<>(List.of("githubUserId", "login", "avatarUrl", "role", "principalRef", "pipesorConnection")), fields(octocat));
+        assertEquals("583231", octocat.get("githubUserId").asString());
+        assertEquals("octocat", octocat.get("login").asString());
+        assertEquals("https://avatars.githubusercontent.com/u/583231?v=4", octocat.get("avatarUrl").asString());
+        assertEquals("ADMIN", octocat.get("role").asString());
+        assertEquals(TENANT + ":" + PlatformIds.human(583231), octocat.get("principalRef").asString());
+        assertTrue(octocat.get("principalRef").asString().matches("[0-9a-f-]{36}:[0-9a-f-]{36}"));
+        assertEquals("ACTIVE", octocat.get("pipesorConnection").asString());
+        var reader = first.get("items").get(1);
+        assertTrue(reader.has("avatarUrl") && reader.get("avatarUrl").isNull());
+        assertEquals("READ", reader.get("role").asString());
+        assertEquals("NONE", reader.get("pipesorConnection").asString());
+        var token = first.get("nextPageToken").asString();
+        assertTrue(token.length() <= 512 && token.matches("[A-Za-z0-9_-]+"), token);
+        var second = request(base, COLLABORATORS + "?pageSize=2&pageToken=" + token, session, null, Map.of());
+        assertEquals(200, second.statusCode(), second.body());
+        var last = JSON.readTree(second.body());
+        assertEquals(List.of("888"), ids(List.of(last), "items", "githubUserId"));
+        assertEquals("WRITE", last.get("items").get(0).get("role").asString());
+        assertEquals("NONE", last.get("items").get(0).get("pipesorConnection").asString());
+        assertTrue(last.has("nextPageToken") && last.get("nextPageToken").isNull());
+        assertEquals(List.of(1, 2), PROVIDER.collaboratorRequests.stream().map(ReadOnlyGitHub.CollaboratorsRequest::page).toList());
+        assertTrue(PROVIDER.collaboratorRequests.stream().allMatch(sent -> sent.pageSize() == 2));
+        assertEquals(2, PROVIDER.connectionReads.size(), "one batched link read per page");
+        assertEquals(200, request(base, COLLABORATORS, session, null, Map.of()).statusCode());
+        assertEquals(30, PROVIDER.collaboratorRequests.getLast().pageSize(), "pageSize defaults to 30");
+        assertEquals(1, PROVIDER.collaboratorRequests.getLast().page());
+    }
+
+    @Test void collaboratorsRequireALinkAnAdmittedRepositoryAndCurrentAdministration() throws Exception {
+        var session = identity.session(GITHUB_USER);
+        PROVIDER.administrator = false;
+        var reader = request(base, COLLABORATORS, session, null, Map.of());
+        assertEquals(403, reader.statusCode(), reader.body());
+        assertEquals("DENIED", JSON.readTree(reader.body()).get("code").asString());
+        assertTrue(reader.headers().firstValue("Content-Type").orElseThrow().contains("application/problem+json"));
+        PROVIDER.administrator = true; PROVIDER.denied = true;
+        var unadmitted = request(base, "/api/v1/github/repositories/823002/collaborators", session, null, Map.of());
+        assertEquals(403, unadmitted.statusCode(), unadmitted.body());
+        assertEquals("DENIED", JSON.readTree(unadmitted.body()).get("code").asString());
+        PROVIDER.denied = false; PROVIDER.unlinked = true;
+        var unlinked = request(base, COLLABORATORS, session, null, Map.of());
+        assertEquals(409, unlinked.statusCode(), unlinked.body());
+        assertEquals("CONNECTION_REQUIRED", JSON.readTree(unlinked.body()).get("code").asString());
+        assertTrue(PROVIDER.collaboratorRequests.isEmpty(), "GitHub collaborators are only read for a current administrator");
+        assertTrue(PROVIDER.connectionReads.isEmpty());
+        assertEquals(401, request(base, COLLABORATORS, null, null, Map.of()).statusCode());
+        assertEquals(403, request(base, COLLABORATORS, identity.workload(FACTS), null, Map.of()).statusCode());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"?pageSize=0", "?pageSize=101", "?pageSize=-1", "?pageSize=x", "?pageSize=", "?pageSize=1.5",
+            "?pageSize=5&pageSize=6", "?pageSize=5&pageSize=5", "?pageToken=a&pageToken=b"})
+    void rejectsOutOfBoundsOrRepeatedCollaboratorParameters(String parameters) throws Exception {
+        var response = request(base, COLLABORATORS + parameters, identity.session(GITHUB_USER), null, Map.of());
+        assertEquals(400, response.statusCode(), parameters);
+        assertEquals("INVALID_REQUEST", JSON.readTree(response.body()).get("code").asString(), parameters);
+        for (var repository : List.of("abc", "-1", "1e3", "0x1")) {
+            var invalid = request(base, "/api/v1/github/repositories/" + repository + "/collaborators", identity.session(GITHUB_USER), null, Map.of());
+            assertEquals(400, invalid.statusCode(), repository);
+            assertEquals("INVALID_REQUEST", JSON.readTree(invalid.body()).get("code").asString(), repository);
+        }
+        assertEquals(0, PROVIDER.reads);
+        assertTrue(PROVIDER.collaboratorRequests.isEmpty());
+    }
+
+    @Test void rejectsForeignOrMalformedCollaboratorPageTokensBeforeProviderReads() throws Exception {
+        var session = identity.session(GITHUB_USER);
+        var token = JSON.readTree(request(base, COLLABORATORS + "?pageSize=1", session, null, Map.of()).body()).get("nextPageToken").asString();
+        PROVIDER.workflowList = List.of(new WorkflowMetadata(new RepositoryTarget("823001", "5001"), "1", "build", "build.yml"),
+                new WorkflowMetadata(new RepositoryTarget("823001", "5001"), "2", "test", "test.yml"));
+        var workflowToken = JSON.readTree(request(base, WORKFLOWS + "?pageSize=1", session, null, Map.of()).body()).get("nextPageToken").asString();
+        PROVIDER.reads = 0; PROVIDER.collaboratorRequests.clear(); PROVIDER.connectionReads.clear();
+        var rejected = List.of(
+                "/api/v1/github/repositories/823002/collaborators?pageSize=1&pageToken=" + token,
+                COLLABORATORS + "?pageSize=2&pageToken=" + token,
+                COLLABORATORS + "?pageToken=" + token,
+                COLLABORATORS + "?pageSize=1&pageToken=" + workflowToken,
+                COLLABORATORS + "?pageSize=1&pageToken=" + token.substring(0, token.length() - 1) + (token.endsWith("A") ? "B" : "A"),
+                COLLABORATORS + "?pageSize=1&pageToken=" + token + "A",
+                COLLABORATORS + "?pageSize=1&pageToken=forged",
+                COLLABORATORS + "?pageSize=1&pageToken=",
+                COLLABORATORS + "?pageSize=1&pageToken=" + "A".repeat(513),
+                COLLABORATORS + "?pageSize=1&pageToken=%21%21");
+        for (var path : rejected) {
+            var response = request(base, path, session, null, Map.of());
+            assertEquals(400, response.statusCode(), path);
+            assertTrue(response.headers().firstValue("Content-Type").orElseThrow().contains("application/problem+json"));
+            assertEquals("INVALID_PAGE_TOKEN", JSON.readTree(response.body()).get("code").asString(), path);
+        }
+        var otherSubject = request(base, COLLABORATORS + "?pageSize=1&pageToken=" + token, identity.session(GITHUB_USER + 1), null, Map.of());
+        assertEquals(400, otherSubject.statusCode(), otherSubject.body());
+        assertEquals("INVALID_PAGE_TOKEN", JSON.readTree(otherSubject.body()).get("code").asString());
+        var asWorkflowToken = request(base, WORKFLOWS + "?pageSize=1&pageToken=" + token, session, null, Map.of());
+        assertEquals("INVALID_PAGE_TOKEN", JSON.readTree(asWorkflowToken.body()).get("code").asString());
+        assertEquals(0, PROVIDER.reads);
+        assertTrue(PROVIDER.collaboratorRequests.isEmpty());
+        assertEquals(200, request(base, COLLABORATORS + "?pageSize=1&pageToken=" + token, session, null, Map.of()).statusCode());
+    }
+
     @Test void connectionStatusAndDisconnectUseOnlySelfIdentityAndExpectedRevision() throws Exception {
         var status = request(base, "/api/v1/github/connection", identity.session(GITHUB_USER), null, Map.of());
         assertEquals(200, status.statusCode());
@@ -521,6 +637,28 @@ class GitHubHttpTests {
             var token = schema.get("components").get("schemas").get(resource).get("properties").get("nextPageToken");
             assertEquals("[\"string\",\"null\"]", token.get("type").toString(), resource);
         }
+        var collaborators = schema.get("paths").get("/api/v1/github/repositories/{repositoryId}/collaborators").get("get");
+        var parameters = new HashMap<String, JsonNode>();
+        for (var parameter : collaborators.get("parameters")) { parameters.put(parameter.get("name").asString(), parameter); }
+        assertEquals(Set.of("repositoryId", "pageSize", "pageToken"), parameters.keySet());
+        assertEquals("path", parameters.get("repositoryId").get("in").asString());
+        var pageSize = parameters.get("pageSize").get("schema");
+        assertEquals("integer", pageSize.get("type").asString());
+        assertEquals(1, pageSize.get("minimum").asInt());
+        assertEquals(100, pageSize.get("maximum").asInt());
+        assertEquals(30, pageSize.get("default").asInt());
+        assertEquals(512, parameters.get("pageToken").get("schema").get("maxLength").asInt());
+        assertTrue(collaborators.get("responses").get("200").get("content").get("application/json").get("schema").get("$ref").asString()
+                .endsWith("/Collaborators"));
+        for (var code : List.of("400", "401", "403", "409", "503")) { assertTrue(collaborators.get("responses").has(code), code); }
+        var schemas = schema.get("components").get("schemas");
+        var collaborator = schemas.get("Collaborator").get("properties");
+        assertEquals("[\"READ\",\"TRIAGE\",\"WRITE\",\"MAINTAIN\",\"ADMIN\"]", collaborator.get("role").get("enum").toString());
+        assertEquals("[\"ACTIVE\",\"NONE\"]", collaborator.get("pipesorConnection").get("enum").toString());
+        assertEquals("[\"string\",\"null\"]", collaborator.get("avatarUrl").get("type").toString());
+        assertEquals(new TreeSet<>(List.of("githubUserId", "login", "avatarUrl", "role", "principalRef", "pipesorConnection")), fields(collaborator));
+        assertEquals(new TreeSet<>(List.of("repositoryId", "fullName")), fields(schemas.get("RepositoryReference").get("properties")));
+        assertEquals("[\"string\",\"null\"]", schemas.get("Collaborators").get("properties").get("nextPageToken").get("type").toString());
         assertEquals(401, request(base, "/swagger-ui/index.html", null, null, Map.of()).statusCode());
     }
 
@@ -620,8 +758,19 @@ class GitHubHttpTests {
         String failure; boolean denied; boolean badSelection; boolean missingGeneration; boolean extraRepositories;
         boolean changeGeneration; boolean delay; int linkReads; int reads; AccessContext lastContext; ConnectionIdentity statusIdentity;
         volatile List<RepositoryFacts> repositoryList; volatile List<WorkflowMetadata> workflowList; volatile int installationReads;
+        volatile boolean administrator = true; volatile boolean unlinked;
+        final List<CollaboratorsRequest> collaboratorRequests = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final List<PipesorConnections.Request> connectionReads = new java.util.concurrent.CopyOnWriteArrayList<>();
+        /** GitHub's collaborator list of 823001, bots already excluded as the real provider does. */
+        static final List<Collaborator> COLLABORATOR_LIST = List.of(
+                new Collaborator("583231", "octocat", URI.create("https://avatars.githubusercontent.com/u/583231?v=4"), CollaboratorRole.ADMIN),
+                new Collaborator("777", "reader", null, CollaboratorRole.READ),
+                new Collaborator("888", "writer", URI.create("https://avatars.githubusercontent.com/u/888?v=4"), CollaboratorRole.WRITE));
+        /** Seeded Pipesor links: octocat holds an active link in the tenant; 888 is linked in another tenant only. */
+        static final Set<PipesorConnections.Principal> SEEDED_LINKS = Set.of(new PipesorConnections.Principal(PlatformIds.human(583231), "583231"));
         Observation<AccessContext, Optional<GitHubLink>> link(AccessContext request) {
             reads++; lastContext = request; linkReads++;
+            if (unlinked) { return observed(request, Optional.empty()); }
             return observed(request, Optional.of(new GitHubLink(request.tenantId(), request.subjectRef(), "github-user", "revision-4", Instant.EPOCH,
                     missingGeneration ? null : changeGeneration && linkReads > 1 ? UUID.randomUUID() : GENERATION)));
         }
@@ -661,6 +810,20 @@ class GitHubHttpTests {
                     Instant.parse("2026-11-20T10:00:00Z"), URI.create("https://github.com/example/service/actions/runs/7001"))), true));
         }
         private WorkflowMetadata workflow(RepositoryTarget target) { return new WorkflowMetadata(target, "12345", "build", "build.yml"); }
-        private RepositoryFacts facts(RepositoryTarget target) { return new RepositoryFacts(target, "account-7", true, true, true, true, true, "example/service", null); }
+        @Override public Observation<CollaboratorsRequest, CollaboratorPage> collaborators(CollaboratorsRequest request) {
+            collaboratorRequests.add(request);
+            int start = Math.min(COLLABORATOR_LIST.size(), (request.page() - 1) * request.pageSize());
+            int end = Math.min(COLLABORATOR_LIST.size(), start + request.pageSize());
+            return observed(request, new CollaboratorPage(COLLABORATOR_LIST.subList(start, end), end < COLLABORATOR_LIST.size()));
+        }
+        Observation<PipesorConnections.Request, Set<PipesorConnections.Principal>> connections(PipesorConnections.Request request) {
+            connectionReads.add(request);
+            var linked = new HashSet<PipesorConnections.Principal>();
+            if (request.tenantId().equals(TENANT)) {
+                request.principals().stream().filter(SEEDED_LINKS::contains).forEach(linked::add);
+            }
+            return observed(request, Set.copyOf(linked));
+        }
+        private RepositoryFacts facts(RepositoryTarget target) { return new RepositoryFacts(target, "account-7", true, true, true, true, administrator, "example/service", null); }
     }
 }

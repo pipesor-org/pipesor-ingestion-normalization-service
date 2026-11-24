@@ -21,6 +21,8 @@ import static org.pipesor.ingestion.github.application.services.GitHubAccessFail
 public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ingestion.auth.application.ports.GitHubLoginDirectory {
     private static final JsonMapper JSON = JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
+    private static final java.util.regex.Pattern LOGIN = java.util.regex.Pattern.compile("[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})");
+    private static final int MAX_AVATAR_URL = 2048;
     private final HttpClient client;
     private final URI root;
     private final Function<Identity, Credential> credentials;
@@ -117,7 +119,7 @@ public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ing
             session.check();
             var user=session.get("/user");
             var userId=id(user,"id"); var login=text(user,"login");
-            if(!login.matches("[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")) { throw failure(UNAVAILABLE); }
+            if(!LOGIN.matcher(login).matches()) { throw failure(UNAVAILABLE); }
             var repositories=new ArrayList<RepositoryFacts>(); var seen=new HashSet<String>();
             for(var installation:session.installations()) {
                 for(var repo:session.pages("/user/installations/"+installation.id()+"/repositories","repositories")) {
@@ -161,6 +163,56 @@ public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ing
             boolean more=(long)request.page()*request.pageSize()<count.longValue() && !array.isEmpty();
             return new Observation<>(request,new RunPage(List.copyOf(runs),more),clock.instant());
         },true);
+    }
+    @Override public Observation<CollaboratorsRequest,CollaboratorPage> collaborators(CollaboratorsRequest request) {
+        return execute(request.repository().identity(),s -> {
+            if(request.page()<1 || request.page()>CollaboratorsRequest.MAX_PAGE || request.pageSize()<1
+                    || request.pageSize()>CollaboratorsRequest.MAX_PAGE_SIZE) { throw failure(UNAVAILABLE); }
+            var facts=s.repository(request.repository().repository());
+            // Only a current administrator may list collaborators; GitHub is never asked otherwise.
+            if(!facts.administrator()) { throw failure(DENIED); }
+            s.verifyRepositoryName(facts);
+            var path="/repos/"+facts.fullName()+"/collaborators";
+            var response=s.request(path+"?affiliation=all&per_page="+request.pageSize()+"&page="+request.page());
+            var array=parseArray(response.body());
+            if(array.size()>request.pageSize()) { throw failure(UNAVAILABLE); }
+            var result=new ArrayList<Collaborator>(); var ids=new HashSet<String>();
+            for(var item:array) {
+                if(!item.isObject()) { throw failure(UNAVAILABLE); }
+                var userId=id(item,"id");
+                if(!ids.add(userId)) { throw failure(UNAVAILABLE); }
+                // Bots and organizations cannot hold a Pipesor link; they are skipped, not reported.
+                if(!"User".equals(text(item,"type"))) { continue; }
+                collaborator(item,userId).ifPresent(result::add);
+            }
+            // GitHub may link the next page through the repository ID instead of its name.
+            boolean more=next(response,List.of(path,"/repositories/"+facts.target().repositoryId()+"/collaborators"),
+                    Map.of("affiliation","all","per_page",Integer.toString(request.pageSize()),"page",Integer.toString(request.page()+1)));
+            if(more && array.isEmpty()) { throw failure(UNAVAILABLE); }
+            s.verifyRepositoryName(facts);
+            return new Observation<>(request,new CollaboratorPage(List.copyOf(result),more),clock.instant());
+        },true);
+    }
+    /** A user entry, or empty when GitHub grants it no permission; custom {@code role_name}s are ignored. */
+    private static Optional<Collaborator> collaborator(JsonNode item,String userId) {
+        // Platform principals are derived from a positive 64-bit GitHub user ID.
+        try { if(!userId.matches("[1-9][0-9]{0,18}") || Long.parseLong(userId)<1) { throw failure(UNAVAILABLE); } }
+        catch(NumberFormatException tooLarge) { throw failure(UNAVAILABLE); }
+        var login=text(item,"login");
+        if(!LOGIN.matcher(login).matches()) { throw failure(UNAVAILABLE); }
+        var permissions=object(item,"permissions");
+        return CollaboratorRole.of(bool(permissions,"admin"),flag(permissions,"maintain"),bool(permissions,"push"),
+                flag(permissions,"triage"),bool(permissions,"pull")).map(role->new Collaborator(userId,login,avatar(item),role));
+    }
+    /** An absolute https avatar URL without user information, or null; nothing else is handed to a browser. */
+    private static URI avatar(JsonNode item) {
+        var value=item.get("avatar_url");
+        if(value==null || !value.isString() || value.asString().length()>MAX_AVATAR_URL) { return null; }
+        try {
+            var uri=new URI(value.asString());
+            return uri.isAbsolute() && "https".equalsIgnoreCase(uri.getScheme()) && uri.getHost()!=null
+                    && uri.getRawUserInfo()==null && uri.getRawFragment()==null ? uri : null;
+        } catch(java.net.URISyntaxException invalid) { return null; }
     }
     /** The attempt's start time; absent or null for runs that never started. */
     private static Instant startedAt(JsonNode item) {
@@ -271,6 +323,10 @@ public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ing
         }
     }
     private boolean next(HttpResponse<?> response,String path,int page) {
+        return next(response,List.of(path),Map.of("per_page",Integer.toString(pageSize),"page",Integer.toString(page)));
+    }
+    /** A single {@code rel="next"} link on the API origin, one of the accepted paths and exactly the expected query. */
+    private boolean next(HttpResponse<?> response,List<String> paths,Map<String,String> expectedQuery) {
         String found=null;
         for(var header:response.headers().allValues("Link")) for(var entry:header.split(",")) {
             var matcher=java.util.regex.Pattern.compile("\\s*<([^>]+)>;\\s*rel=\"(next|prev|first|last)\"\\s*").matcher(entry);
@@ -278,15 +334,15 @@ public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ing
             if(matcher.group(2).equals("next")) { if(found!=null) { throw failure(UNAVAILABLE); } found=matcher.group(1); }
         }
         if(found==null) { return false; }
-        var uri=root.resolve(found); var expected=root.resolve(path);
+        var uri=root.resolve(found); var expected=root.resolve(paths.getFirst());
         if(!Objects.equals(uri.getScheme(),expected.getScheme()) || !Objects.equals(uri.getRawAuthority(),expected.getRawAuthority())
-                || !uri.getRawPath().equals(path) || uri.getFragment()!=null) { throw failure(UNAVAILABLE); }
+                || !paths.contains(uri.getRawPath()) || uri.getFragment()!=null) { throw failure(UNAVAILABLE); }
         var query=new HashMap<String,String>();
         if(uri.getRawQuery()==null) { throw failure(UNAVAILABLE); }
         for(var pair:uri.getRawQuery().split("&")) {
             var parts=pair.split("=",-1); if(parts.length!=2 || query.put(parts[0],parts[1])!=null) { throw failure(UNAVAILABLE); }
         }
-        if(!query.equals(Map.of("per_page",Integer.toString(pageSize),"page",Integer.toString(page)))) { throw failure(UNAVAILABLE); }
+        if(!query.equals(expectedQuery)) { throw failure(UNAVAILABLE); }
         return true;
     }
     private static RepositoryFacts facts(JsonNode repo,Installation installation) {
@@ -304,6 +360,12 @@ public final class GitHubReadProvider implements ReadOnlyGitHub, org.pipesor.ing
         return new WorkflowMetadata(target,id(body,"id"),text(body,"name"),text(body,"path"));
     }
     private static JsonNode parse(byte[] bytes) { var body=JSON.readTree(bytes); if(body==null || !body.isObject()) { throw failure(UNAVAILABLE); } return body; }
+    private static JsonNode parseArray(byte[] bytes) { var body=JSON.readTree(bytes); if(body==null || !body.isArray()) { throw failure(UNAVAILABLE); } return body; }
+    /** An optional permission flag: absent or null is false, any other non-boolean is incompatible evidence. */
+    private static boolean flag(JsonNode body,String name) {
+        var value=body.get(name); if(value==null || value.isNull()) { return false; }
+        if(!value.isBoolean()) { throw failure(UNAVAILABLE); } return value.booleanValue();
+    }
     private static JsonNode object(JsonNode body,String name) { var value=body.get(name); if(value==null || !value.isObject()) { throw failure(UNAVAILABLE); } return value; }
     private static String text(JsonNode body,String name) { var value=body.get(name); if(value==null || !value.isString() || value.asString().isBlank()) { throw failure(UNAVAILABLE); } return value.asString(); }
     private static String id(JsonNode body,String name) {

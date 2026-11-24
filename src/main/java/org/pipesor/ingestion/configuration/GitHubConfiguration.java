@@ -31,6 +31,7 @@ import org.pipesor.ingestion.github.infrastructure.custody.FileCredentialCustody
 import org.pipesor.ingestion.github.infrastructure.custody.KeyVaultCredentialCustody;
 import org.pipesor.ingestion.github.infrastructure.oauth.GitHubAppClientId;
 import org.pipesor.ingestion.github.infrastructure.oauth.GitHubOAuthUserTokens;
+import org.pipesor.ingestion.github.infrastructure.persistence.jdbc.JdbcPipesorConnections;
 import org.pipesor.ingestion.github.infrastructure.persistence.jpa.JpaConnectionRepository;
 import org.pipesor.ingestion.github.infrastructure.persistence.jpa.JpaConnectionStatusReader;
 import org.pipesor.ingestion.github.infrastructure.persistence.jpa.JpaRefreshSnapshotReader;
@@ -176,9 +177,16 @@ public class GitHubConfiguration {
                 limits.userMaxItems(), limits.userMaxResponseBytes(), clock);
     }
 
+    /** Batched link state of collaborator pages (ADR-028); read after, never inside, the GitHub call. */
     @Bean
-    GitHubQueries githubQueries(ConnectedGitHubLink link, JdbcCaptureAuthority authority, GitHubReadProvider provider, Clock clock) {
-        return new GitHubQueryHandler(link, authority, authority, provider, clock);
+    PipesorConnections pipesorConnections(JdbcTemplate jdbc, Clock clock) {
+        return new JdbcPipesorConnections(jdbc, clock);
+    }
+
+    @Bean
+    GitHubQueries githubQueries(ConnectedGitHubLink link, JdbcCaptureAuthority authority, GitHubReadProvider provider,
+            PipesorConnections connections, Clock clock) {
+        return new GitHubQueryHandler(link, authority, authority, provider, connections, clock);
     }
 
     /** Vendor-HMAC ingress for the admitted machine scopes of the configured capture domain. */
