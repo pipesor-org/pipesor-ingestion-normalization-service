@@ -20,9 +20,11 @@ public final class JdbcConsentRecords implements ConsentRecords {
         jdbc.update("""
                 insert into ingestion.consent_records (id, tenant_id, entra_object_id, github_user_id, documents_version,
                   accepted_at, recorded_at, source, login_attempt_id, correlation_id)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                values (?, ?, ?, ?, ?, ?, greatest(?::timestamptz, ?::timestamptz), ?, ?, ?)""",
+                // Start and callback may run on replicas with slightly different clocks; never record before acceptance.
                 record.id(), record.principal().tenantId(), record.principal().objectId(), record.githubUserId(),
                 record.documentsVersion(), Timestamp.from(record.acceptedAt()), Timestamp.from(record.recordedAt()),
+                Timestamp.from(record.acceptedAt()),
                 record.source().name(), record.loginAttemptId(), record.correlationId());
     }
 
