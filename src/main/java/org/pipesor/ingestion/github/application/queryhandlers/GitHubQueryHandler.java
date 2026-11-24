@@ -141,6 +141,22 @@ public final class GitHubQueryHandler implements GitHubQueries {
     }
 
     @Override
+    public GitHubViews.RepositoryPage discoverRepositoryPage(DiscoverRepositoryPageQuery query) {
+        var all = discoverRepositories(query.discovery());
+        var page = DiscoveryPaging.slice(all.repositories(), GitHubViews.Repository::fullName,
+                repository -> repository.target().repositoryId(), repository -> List.of(repository.fullName()), query.page());
+        return new GitHubViews.RepositoryPage(all.context(), all.link(), all.observedAt(), page.items(), page.next());
+    }
+
+    @Override
+    public GitHubViews.WorkflowPage discoverWorkflowPage(DiscoverWorkflowPageQuery query) {
+        var all = discoverWorkflows(query.discovery());
+        var page = DiscoveryPaging.slice(all.workflows(), WorkflowMetadata::name, WorkflowMetadata::workflowId,
+                workflow -> List.of(workflow.name(), workflow.file()), query.page());
+        return new GitHubViews.WorkflowPage(all.context(), all.link(), all.observedAt(), all.repository(), page.items(), page.next());
+    }
+
+    @Override
     public GitHubViews.Selection selectWorkflow(SelectWorkflowQuery query) {
         var identity = begin(query.context());
         var repository = requireRepository(identity, query.repository());

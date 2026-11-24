@@ -27,6 +27,16 @@ public final class GitHubViews {
                             List<WorkflowMetadata> workflows) {
         public Workflows { workflows = List.copyOf(workflows); }
     }
+    /** One page of discovered repositories; {@code next} is null on the last page. */
+    public record RepositoryPage(AccessContext context, GitHubLink link, Instant observedAt, List<Repository> repositories,
+                                 DiscoveryPage.Position next) {
+        public RepositoryPage { repositories = List.copyOf(repositories); }
+    }
+    /** One page of discovered workflows; {@code next} is null on the last page. */
+    public record WorkflowPage(AccessContext context, GitHubLink link, Instant observedAt, Repository repository,
+                               List<WorkflowMetadata> workflows, DiscoveryPage.Position next) {
+        public WorkflowPage { workflows = List.copyOf(workflows); }
+    }
     public record Runs(AccessContext context, GitHubLink link, Instant observedAt, Repository repository,
                        List<org.pipesor.ingestion.github.application.ports.ReadOnlyGitHub.WorkflowRun> runs, boolean more) {
         public Runs { runs = List.copyOf(runs); }

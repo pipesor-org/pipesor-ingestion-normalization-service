@@ -10,6 +10,8 @@ import org.pipesor.ingestion.github.domain.model.valueobjects.AccessOperation;
 
 public final class GitHubResources {
     private GitHubResources() {}
+    private static final String NEXT_PAGE_TOKEN = "Opaque token of the next page for the same route, repository and q; "
+            + "null on the last page and always null in the legacy limit form";
     public record AccessRequest(@Schema(example = "request-1", requiredMode = Schema.RequiredMode.REQUIRED) String requestId,
                                 @Schema(example = "corr-http", requiredMode = Schema.RequiredMode.REQUIRED) String correlationId,
                                 @Schema(example = "2026-11-09T12:00:30Z", requiredMode = Schema.RequiredMode.REQUIRED) Instant deadline,
@@ -40,14 +42,18 @@ public final class GitHubResources {
     public record DiscoveryContext(String requestId, String correlationId, UUID tenantId, UUID actorObjectId, UUID subjectObjectId,
                                    AccessOperation operation, String githubUserId, UUID generationId, String revision,
                                    Instant observedAt, Instant validUntil) {}
-    public record Repositories(DiscoveryContext context, List<Repository> repositories) {}
+    public record Repositories(DiscoveryContext context, List<Repository> repositories,
+                               @Schema(description = NEXT_PAGE_TOKEN, types = {"string", "null"}, maxLength = 512,
+                                       requiredMode = Schema.RequiredMode.REQUIRED) String nextPageToken) {}
     /** ADR-024: {@code admitted} means Pipesor may monitor the repository; {@code userIsAdmin} is the user's GitHub role. */
     public record RepositoryAdmission(String repositoryId, String fullName, boolean admitted, boolean userIsAdmin) {}
     public record Account(String id, String login) {}
     /** {@code suspended} installations list no repositories until GitHub resumes them. */
     public record Installation(String installationId, Account account, boolean suspended, List<RepositoryAdmission> repositories) {}
     public record Installations(DiscoveryContext context, List<Installation> installations) {}
-    public record Workflows(DiscoveryContext context, Repository repository, List<Workflow> workflows) {}
+    public record Workflows(DiscoveryContext context, Repository repository, List<Workflow> workflows,
+                            @Schema(description = NEXT_PAGE_TOKEN, types = {"string", "null"}, maxLength = 512,
+                                    requiredMode = Schema.RequiredMode.REQUIRED) String nextPageToken) {}
     public record Run(String runId, int attempt, String conclusion, String headBranch, String headSha, Instant createdAt,
                       Instant runStartedAt, String htmlUrl) {}
     public record Runs(List<Run> items, String nextPageToken) {}

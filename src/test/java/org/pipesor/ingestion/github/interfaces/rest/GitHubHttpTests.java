@@ -24,6 +24,7 @@ import org.springframework.boot.test.system.*;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.*;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -42,6 +43,8 @@ class GitHubHttpTests {
     private static final UUID GENERATION = UUID.fromString("66666666-6666-4666-8666-666666666666");
     private static final UUID CONNECTION = UUID.fromString("77777777-7777-4777-8777-777777777777");
     private static final String SELF_PATH = "/api/v1/github/repositories?limit=5";
+    private static final String REPOSITORIES = "/api/v1/github/repositories";
+    private static final String WORKFLOWS = "/api/v1/github/repositories/823001/workflows";
     private static final String ACCESS_PATH = "/internal/v1/github/access-verifications";
     private static final String FACTS = "Pipeline.GitHubFacts.Read";
     private static final JsonMapper JSON = JsonMapper.builder().build();
@@ -86,6 +89,7 @@ class GitHubHttpTests {
         PROVIDER.missingGeneration = false; PROVIDER.extraRepositories = false; PROVIDER.reads = 0;
         PROVIDER.changeGeneration = false; PROVIDER.linkReads = 0;
         PROVIDER.delay = false; CLOCK.offset = Duration.ZERO;
+        PROVIDER.repositoryList = null; PROVIDER.workflowList = null; PROVIDER.installationReads = 0;
         org.mockito.Mockito.reset(context.getBean(GitHubConnections.class));
     }
 
@@ -319,6 +323,145 @@ class GitHubHttpTests {
         }
     }
 
+    @Test void pagesMoreThanOneHundredRepositoriesInCaseInsensitiveThenNumericOrder() throws Exception {
+        PROVIDER.repositoryList = manyRepositories();
+        var pages = pages(REPOSITORIES + "?pageSize=100", "repositories");
+        assertEquals(2, pages.size());
+        assertEquals(100, pages.get(0).get("repositories").size());
+        assertEquals(50, pages.get(1).get("repositories").size());
+        assertTrue(pages.get(1).get("nextPageToken").isNull());
+        assertEquals(expectedRepositoryOrder(), ids(pages, "repositories", "repositoryId"));
+        assertEquals(2, PROVIDER.installationReads, "every page repeats the ADR-024 reconciliation");
+        var first = pages.get(0).get("context");
+        for (var page : pages) {
+            var context = page.get("context");
+            assertEquals(fields(first), fields(context));
+            for (var field : List.of("tenantId", "actorObjectId", "subjectObjectId", "operation", "githubUserId", "generationId", "revision")) {
+                assertEquals(first.get(field).asString(), context.get(field).asString(), field);
+            }
+        }
+        var legacy = request(base, REPOSITORIES + "?limit=100", identity.session(GITHUB_USER), null, Map.of());
+        assertEquals(503, legacy.statusCode(), legacy.body());
+        assertEquals("VERIFICATION_UNAVAILABLE", JSON.readTree(legacy.body()).get("code").asString());
+    }
+
+    @Test void filtersRepositoriesCaseInsensitivelyAndPagesUnderTheFilter() throws Exception {
+        PROVIDER.repositoryList = manyRepositories();
+        var pages = pages(REPOSITORIES + "?pageSize=20&q=" + query(" REPO-1 "), "repositories");
+        assertEquals(List.of(20, 20, 8), pages.stream().map(page -> page.get("repositories").size()).toList());
+        var expected = expectedRepositoryOrder().stream().filter(id -> id.length() == 6 && 900147 - Integer.parseInt(id) >= 100).toList();
+        assertEquals(expected, ids(pages, "repositories", "repositoryId"));
+        for (var page : pages) {
+            for (var repository : page.get("repositories")) {
+                assertTrue(repository.get("fullName").asString().toLowerCase(Locale.ROOT).contains("repo-1"), repository.toString());
+            }
+        }
+        var token = pages.get(0).get("nextPageToken").asString();
+        var normalized = request(base, REPOSITORIES + "?pageSize=20&q=repo-1&pageToken=" + token, identity.session(GITHUB_USER), null, Map.of());
+        assertEquals(200, normalized.statusCode(), "the token binds the trimmed, case-insensitive q");
+        var none = JSON.readTree(request(base, REPOSITORIES + "?pageSize=20&q=absent", identity.session(GITHUB_USER), null, Map.of()).body());
+        assertEquals(0, none.get("repositories").size());
+        assertTrue(none.get("nextPageToken").isNull());
+        assertEquals(200, request(base, REPOSITORIES + "?pageSize=1&q=" + "x".repeat(100), identity.session(GITHUB_USER), null, Map.of()).statusCode());
+        assertEquals(200, request(base, REPOSITORIES + "?pageSize=1&q=xy", identity.session(GITHUB_USER), null, Map.of()).statusCode());
+    }
+
+    @Test void pagesWorkflowsAndFiltersOnNameOrFile() throws Exception {
+        var workflows = new ArrayList<WorkflowMetadata>();
+        var target = new RepositoryTarget("823001", "5001");
+        workflows.add(new WorkflowMetadata(target, "77", "Deploy production", ".github/workflows/RELEASE.yml"));
+        for (int index = 1; index < 150; index++) {
+            workflows.add(new WorkflowMetadata(target, Integer.toString(5000 + index), (index % 2 == 0 ? "Build " : "build ")
+                    + String.format("%03d", 149 - index), ".github/workflows/w" + index + ".yml"));
+        }
+        PROVIDER.workflowList = List.copyOf(workflows);
+        var pages = pages(WORKFLOWS + "?pageSize=100", "workflows");
+        assertEquals(List.of(100, 50), pages.stream().map(page -> page.get("workflows").size()).toList());
+        var expected = new ArrayList<String>();
+        for (int index = 149; index >= 1; index--) { expected.add(Integer.toString(5000 + index)); }
+        expected.add("77");
+        assertEquals(expected, ids(pages, "workflows", "workflowId"));
+        for (var page : pages) {
+            assertEquals("823001", page.get("repository").get("repositoryId").asString());
+            assertEquals("DISCOVER", page.get("context").get("operation").asString());
+        }
+        var byFile = pages(WORKFLOWS + "?pageSize=5&q=release", "workflows");
+        assertEquals(List.of("77"), ids(byFile, "workflows", "workflowId"));
+        var byName = pages(WORKFLOWS + "?pageSize=4&q=BUILD%2014", "workflows");
+        assertEquals(List.of(4, 4, 1), byName.stream().map(page -> page.get("workflows").size()).toList());
+        assertEquals(List.of("5009", "5008", "5007", "5006", "5005", "5004", "5003", "5002", "5001"), ids(byName, "workflows", "workflowId"));
+        var legacy = request(base, WORKFLOWS + "?limit=100", identity.session(GITHUB_USER), null, Map.of());
+        assertEquals(503, legacy.statusCode(), legacy.body());
+    }
+
+    @Test void rejectsMalformedAndMisboundPageTokensBeforeProviderReads() throws Exception {
+        PROVIDER.repositoryList = manyRepositories();
+        var session = identity.session(GITHUB_USER);
+        var repositoryToken = JSON.readTree(request(base, REPOSITORIES + "?pageSize=5&q=repo", session, null, Map.of()).body()).get("nextPageToken").asString();
+        var unfiltered = JSON.readTree(request(base, REPOSITORIES + "?pageSize=5", session, null, Map.of()).body()).get("nextPageToken").asString();
+        PROVIDER.workflowList = List.of(new WorkflowMetadata(new RepositoryTarget("823001", "5001"), "1", "build", "build.yml"),
+                new WorkflowMetadata(new RepositoryTarget("823001", "5001"), "2", "test", "test.yml"));
+        var workflowToken = JSON.readTree(request(base, WORKFLOWS + "?pageSize=1", session, null, Map.of()).body()).get("nextPageToken").asString();
+        assertTrue(repositoryToken.length() <= 512 && repositoryToken.matches("[A-Za-z0-9_-]+"), repositoryToken);
+        PROVIDER.reads = 0; PROVIDER.installationReads = 0;
+        var flipped = (repositoryToken.charAt(5) == 'A' ? 'B' : 'A');
+        var rejected = List.of(
+                REPOSITORIES + "?pageSize=5&q=repo-&pageToken=" + repositoryToken,
+                REPOSITORIES + "?pageSize=5&pageToken=" + repositoryToken,
+                REPOSITORIES + "?pageSize=5&q=repo&pageToken=" + unfiltered,
+                REPOSITORIES + "?pageSize=5&pageToken=" + workflowToken,
+                "/api/v1/github/repositories/823002/workflows?pageSize=1&pageToken=" + workflowToken,
+                WORKFLOWS + "?pageSize=1&pageToken=" + unfiltered,
+                REPOSITORIES + "?pageSize=5&q=repo&pageToken=" + repositoryToken.substring(0, 5) + flipped + repositoryToken.substring(6),
+                REPOSITORIES + "?pageSize=5&q=repo&pageToken=" + repositoryToken + "A",
+                REPOSITORIES + "?pageSize=5&q=repo&pageToken=" + repositoryToken + "%3D",
+                REPOSITORIES + "?pageSize=5&pageToken=forged",
+                REPOSITORIES + "?pageSize=5&pageToken=",
+                REPOSITORIES + "?pageSize=5&pageToken=" + "A".repeat(513),
+                WORKFLOWS + "?pageSize=1&pageToken=%21%21");
+        for (var path : rejected) {
+            var response = request(base, path, session, null, Map.of());
+            assertEquals(400, response.statusCode(), path);
+            assertTrue(response.headers().firstValue("Content-Type").orElseThrow().contains("application/problem+json"));
+            assertEquals("INVALID_PAGE_TOKEN", JSON.readTree(response.body()).get("code").asString(), path);
+        }
+        assertEquals(0, PROVIDER.reads);
+        assertEquals(0, PROVIDER.installationReads);
+        assertEquals(200, request(base, REPOSITORIES + "?pageSize=5&q=repo&pageToken=" + repositoryToken, session, null, Map.of()).statusCode());
+        assertEquals(200, request(base, WORKFLOWS + "?pageSize=1&pageToken=" + workflowToken, session, null, Map.of()).statusCode());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "?limit=5&pageSize=5", "?limit=5&q=ab", "?limit=5&pageToken=abc", "?q=ab", "?pageToken=abc",
+            "?pageSize=5&cursor=x", "?limit=5&cursor=", "?pageSize=0", "?pageSize=101", "?pageSize=x", "?limit=0", "?limit=101",
+            "?pageSize=5&q=a", "?pageSize=5&q=%20a%20", "?pageSize=5&q=", "?pageSize=5&pageSize=6", "?pageSize=5&q=ab&q=cd"})
+    void rejectsAmbiguousOrOutOfBoundsDiscoveryForms(String parameters) throws Exception {
+        for (var path : List.of(REPOSITORIES, WORKFLOWS)) {
+            var response = request(base, path + parameters, identity.session(GITHUB_USER), null, Map.of());
+            assertEquals(400, response.statusCode(), path + parameters);
+            assertEquals("INVALID_REQUEST", JSON.readTree(response.body()).get("code").asString(), path + parameters);
+        }
+        var longQuery = request(base, REPOSITORIES + "?pageSize=5&q=" + "a".repeat(101), identity.session(GITHUB_USER), null, Map.of());
+        assertEquals(400, longQuery.statusCode());
+        assertEquals("INVALID_REQUEST", JSON.readTree(longQuery.body()).get("code").asString());
+        assertEquals(0, PROVIDER.reads);
+    }
+
+    @Test void legacyLimitFormIsUnchanged() throws Exception {
+        var session = identity.session(GITHUB_USER);
+        var single = JSON.readTree(request(base, REPOSITORIES + "?limit=5", session, null, Map.of()).body());
+        assertEquals(List.of("823001"), ids(List.of(single), "repositories", "repositoryId"));
+        assertTrue(single.get("nextPageToken").isNull());
+        PROVIDER.repositoryList = List.of(repository("30", "example/c"), repository("10", "example/a"), repository("20", "example/b"));
+        var complete = request(base, REPOSITORIES + "?limit=3", session, null, Map.of());
+        assertEquals(200, complete.statusCode(), complete.body());
+        assertEquals(List.of("30", "10", "20"), ids(List.of(JSON.readTree(complete.body())), "repositories", "repositoryId"));
+        assertEquals(503, request(base, REPOSITORIES + "?limit=2", session, null, Map.of()).statusCode());
+        var workflows = JSON.readTree(request(base, WORKFLOWS + "?limit=5", session, null, Map.of()).body());
+        assertEquals(1, workflows.get("workflows").size());
+        assertTrue(workflows.get("nextPageToken").isNull());
+    }
+
     @Test void connectionStatusAndDisconnectUseOnlySelfIdentityAndExpectedRevision() throws Exception {
         var status = request(base, "/api/v1/github/connection", identity.session(GITHUB_USER), null, Map.of());
         assertEquals(200, status.statusCode());
@@ -361,6 +504,23 @@ class GitHubHttpTests {
         assertTrue(schema.get("paths").has(ACCESS_PATH));
         assertTrue(schema.get("paths").has("/api/v1/github/repositories/{repositoryId}/workflows/{workflowId}/runs"));
         assertTrue(schema.get("components").get("securitySchemes").has("platformBearer"));
+        for (var path : List.of(REPOSITORIES, "/api/v1/github/repositories/{repositoryId}/workflows")) {
+            var parameters = new HashMap<String, JsonNode>();
+            for (var parameter : schema.get("paths").get(path).get("get").get("parameters")) { parameters.put(parameter.get("name").asString(), parameter.get("schema")); }
+            for (var name : List.of("limit", "pageSize")) {
+                assertEquals("integer", parameters.get(name).get("type").asString(), name);
+                assertEquals(1, parameters.get(name).get("minimum").asInt(), name);
+                assertEquals(100, parameters.get(name).get("maximum").asInt(), name);
+            }
+            assertEquals(2, parameters.get("q").get("minLength").asInt());
+            assertEquals(100, parameters.get("q").get("maxLength").asInt());
+            assertEquals(512, parameters.get("pageToken").get("maxLength").asInt());
+            assertFalse(parameters.containsKey("cursor"));
+        }
+        for (var resource : List.of("Repositories", "Workflows")) {
+            var token = schema.get("components").get("schemas").get(resource).get("properties").get("nextPageToken");
+            assertEquals("[\"string\",\"null\"]", token.get("type").toString(), resource);
+        }
         assertEquals(401, request(base, "/swagger-ui/index.html", null, null, Map.of()).statusCode());
     }
 
@@ -384,7 +544,7 @@ class GitHubHttpTests {
         properties.addAll(List.of("server.port=0", "server.address=127.0.0.1", "spring.main.banner-mode=off", "logging.level.root=WARN",
                 "springdoc.api-docs.enabled=true", "springdoc.swagger-ui.enabled=false",
                 "pipesor.api.limits.request-timeout=30s", "pipesor.api.limits.max-batch-size=5",
-                "pipesor.api.limits.max-page-size=5", "pipesor.api.limits.max-request-bytes=16384",
+                "pipesor.api.limits.max-page-size=100", "pipesor.api.limits.max-request-bytes=16384",
                 "pipesor.api.limits.max-response-bytes=1000000", "pipesor.api.limits.max-context-length=128"));
         properties.addAll(List.of(extra));
         return new SpringApplicationBuilder(HttpApplication.class).profiles("local")
@@ -405,6 +565,50 @@ class GitHubHttpTests {
         if (recipient != null) { body.put("recipientObjectId", recipient.toString()); }
         return JSON.writeValueAsString(body);
     }
+    /** Follows nextPageToken until the last page, checking that every token is opaque URL-safe text within 512 characters. */
+    private static List<JsonNode> pages(String path, String items) throws Exception {
+        var pages = new ArrayList<JsonNode>();
+        String token = null;
+        do {
+            var response = request(base, token == null ? path : path + "&pageToken=" + token, identity.session(GITHUB_USER), null, Map.of());
+            assertEquals(200, response.statusCode(), response.body());
+            var page = JSON.readTree(response.body());
+            assertTrue(page.has("nextPageToken") && page.get(items).isArray(), response.body());
+            pages.add(page);
+            token = page.get("nextPageToken").isNull() ? null : page.get("nextPageToken").asString();
+            assertTrue(token == null || token.length() <= 512 && token.matches("[A-Za-z0-9_-]+"), token);
+            assertTrue(pages.size() <= 20, "paging terminates");
+        } while (token != null);
+        return pages;
+    }
+    /** Item IDs across pages, in order; fails on any duplicate. */
+    private static List<String> ids(List<JsonNode> pages, String items, String id) {
+        var result = new ArrayList<String>();
+        for (var page : pages) { for (var item : page.get(items)) { result.add(item.get(id).asString()); } }
+        assertEquals(result.size(), new HashSet<>(result).size(), "no item appears twice");
+        return result;
+    }
+    private static Set<?> fields(JsonNode node) { return new TreeSet<>(JSON.convertValue(node, Map.class).keySet()); }
+    private static String query(String value) { return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20"); }
+    private static RepositoryFacts repository(String id, String fullName) {
+        return new RepositoryFacts(new RepositoryTarget(id, "5001"), "account-7", true, true, true, true, true, fullName, "main");
+    }
+    /** 150 repositories in reverse order, alternating owner case; "aaa" twice with IDs 10 and 9 to check numeric tie-breaking. */
+    private static List<RepositoryFacts> manyRepositories() {
+        var repositories = new ArrayList<RepositoryFacts>();
+        for (int index = 0; index < 148; index++) {
+            repositories.add(repository(Integer.toString(900000 + index), (index % 2 == 0 ? "Example/" : "example/")
+                    + "Repo-" + String.format("%03d", 147 - index)));
+        }
+        repositories.add(repository("10", "example/AAA"));
+        repositories.add(repository("9", "Example/aaa"));
+        return List.copyOf(repositories);
+    }
+    private static List<String> expectedRepositoryOrder() {
+        var expected = new ArrayList<>(List.of("9", "10"));
+        for (int index = 147; index >= 0; index--) { expected.add(Integer.toString(900000 + index)); }
+        return expected;
+    }
     private static <Q, T> Observation<Q, T> observed(Q request, T value) { return new Observation<>(request, value, CLOCK.instant()); }
     private static final class MutableClock extends Clock {
         volatile Duration offset = Duration.ZERO;
@@ -415,6 +619,7 @@ class GitHubHttpTests {
     private static final class SyntheticProvider implements ReadOnlyGitHub {
         String failure; boolean denied; boolean badSelection; boolean missingGeneration; boolean extraRepositories;
         boolean changeGeneration; boolean delay; int linkReads; int reads; AccessContext lastContext; ConnectionIdentity statusIdentity;
+        volatile List<RepositoryFacts> repositoryList; volatile List<WorkflowMetadata> workflowList; volatile int installationReads;
         Observation<AccessContext, Optional<GitHubLink>> link(AccessContext request) {
             reads++; lastContext = request; linkReads++;
             return observed(request, Optional.of(new GitHubLink(request.tenantId(), request.subjectRef(), "github-user", "revision-4", Instant.EPOCH,
@@ -433,14 +638,22 @@ class GitHubHttpTests {
         }
         @Override public Observation<RepositoryRequest, RepositoryFacts> repository(RepositoryRequest request) { return observed(request, facts(request.repository())); }
         @Override public Observation<Identity, List<InstallationRepositories>> installations(Identity request) {
+            installationReads++;
             var repositories = repositories(request).value();
             return observed(request, List.of(new InstallationRepositories("5001", repositories.get(0).accountId(), "example", true, repositories)));
         }
         @Override public Observation<Identity, List<RepositoryFacts>> repositories(Identity request) {
+            if (repositoryList != null) { return observed(request, repositoryList); }
             return observed(request, extraRepositories ? List.of(facts(new RepositoryTarget("823001", "5001")), facts(new RepositoryTarget("823002", "5001")))
                     : List.of(facts(new RepositoryTarget("823001", "5001"))));
         }
-        @Override public Observation<RepositoryRequest, List<WorkflowMetadata>> workflows(RepositoryRequest request) { return observed(request, List.of(workflow(request.repository()))); }
+        @Override public Observation<RepositoryRequest, List<WorkflowMetadata>> workflows(RepositoryRequest request) {
+            if (workflowList != null) {
+                return observed(request, workflowList.stream().map(workflow -> new WorkflowMetadata(request.repository(), workflow.workflowId(),
+                        workflow.name(), workflow.file())).toList());
+            }
+            return observed(request, List.of(workflow(request.repository())));
+        }
         @Override public Observation<WorkflowRequest, WorkflowMetadata> workflow(WorkflowRequest request) { return observed(request, workflow(request.repository().repository())); }
         @Override public Observation<RunsRequest, RunPage> runs(RunsRequest request) {
             reads++;
