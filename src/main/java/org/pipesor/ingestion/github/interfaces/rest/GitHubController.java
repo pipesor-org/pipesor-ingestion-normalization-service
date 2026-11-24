@@ -36,6 +36,7 @@ import org.springframework.web.bind.annotation.*;
 })
 public class GitHubController {
     private static final int DEFAULT_RUN_PAGE_SIZE = 24;
+    private static final int DEFAULT_COLLABORATOR_PAGE_SIZE = 30;
     private static final String LIMIT = "Legacy form: complete list of at most limit items (1-100); excludes pageSize, pageToken and q";
     private static final String PAGE_SIZE = "Paged form (required): items per page (1-100)";
     private static final String PAGE_TOKEN = "Paged form: opaque nextPageToken of the previous page, valid only for the same route, repository and q";
@@ -203,6 +204,49 @@ public class GitHubController {
                 run.conclusion(), run.headBranch(), run.headSha(), run.createdAt(), run.runStartedAt(), run.htmlUrl().toString())).toList(), next);
     }
 
+    @GetMapping("/api/v1/github/repositories/{repositoryId}/collaborators")
+    @Operation(summary = "List the GitHub collaborators of a repository the caller currently administers",
+            description = "Requires an active GitHub link (else 409 CONNECTION_REQUIRED), the repository admitted in a pipesor "
+                    + "installation and readable, and the caller's current GitHub admin permission on it, read with the caller's "
+                    + "own token (else 403 DENIED; GitHub's collaborators are not read then). Returns one GitHub page "
+                    + "(affiliation=all) in GitHub's order without bots or organizations, so a page may hold fewer than pageSize "
+                    + "items: only nextPageToken (null on the last page) signals more. pipesorConnection discloses to the "
+                    + "repository administrator whether each collaborator currently holds an active Pipesor GitHub link, because "
+                    + "grants can only target linked users (ADR-028). Repeated parameters, a non-numeric repositoryId or pageSize "
+                    + "outside 1-100 are 400 INVALID_REQUEST; a malformed pageToken, or one issued for another repository, subject "
+                    + "or pageSize, is 400 INVALID_PAGE_TOKEN.")
+    @ApiResponse(responseCode = "200", description = "Repository, one page of collaborators and nextPageToken",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = GitHubResources.Collaborators.class)))
+    public GitHubResources.Collaborators collaborators(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, HttpServletRequest request,
+                                                        @PathVariable String repositoryId,
+                                                        @Parameter(description = "Collaborators requested from GitHub per page (1-100)",
+                                                                schema = @Schema(type = "integer", format = "int32", minimum = "1", maximum = "100",
+                                                                        defaultValue = "" + DEFAULT_COLLABORATOR_PAGE_SIZE)) @RequestParam(required = false) Integer pageSize,
+                                                        @Parameter(description = "Opaque nextPageToken of the previous page, valid only for the same repository, subject and pageSize",
+                                                                schema = @Schema(maxLength = DiscoveryPageTokens.MAX_LENGTH)) @RequestParam(required = false) String pageToken) {
+        int size = collaboratorPageSize(request, pageSize);
+        var ids = ids(List.of(repositoryId));
+        var context = RequestContext.self(jwt, request, limits, clock);
+        var tokens = DiscoveryPageTokens.Binding.collaborators(repositoryId, context.access().subjectRef(), size);
+        int page = DiscoveryPageTokens.decodePage(pageToken, tokens, ReadOnlyGitHub.CollaboratorsRequest.MAX_PAGE);
+        var target = resolve(context, ids).get(repositoryId).orElseThrow(() -> new ApiFailure(403, "DENIED"));
+        var result = queries.listCollaborators(new ListCollaboratorsQuery(context.access(), target, page, size));
+        if (result == null || result.repository() == null || !target.equals(result.repository().target())
+                || result.collaborators().size() > size) { throw ApiFailure.unavailable(); }
+        binding(context, result.context(), result.link(), result.observedAt());
+        var tenant = context.access().tenantId() + ":";
+        var items = new ArrayList<GitHubResources.Collaborator>();
+        for (var collaborator : result.collaborators()) {
+            if (collaborator.principalRef() == null || !collaborator.principalRef().startsWith(tenant)) { throw ApiFailure.unavailable(); }
+            items.add(new GitHubResources.Collaborator(collaborator.githubUserId(), collaborator.login(),
+                    collaborator.avatarUrl() == null ? null : collaborator.avatarUrl().toString(), collaborator.role(), collaborator.principalRef(),
+                    collaborator.linked() ? GitHubResources.PipesorConnection.ACTIVE : GitHubResources.PipesorConnection.NONE));
+        }
+        var next = result.more() && page < ReadOnlyGitHub.CollaboratorsRequest.MAX_PAGE ? DiscoveryPageTokens.encodePage(page + 1, tokens) : null;
+        return new GitHubResources.Collaborators(new GitHubResources.RepositoryReference(target.repositoryId(), result.repository().fullName()),
+                List.copyOf(items), next);
+    }
+
     @GetMapping("/api/v1/github/connection")
     @Operation(summary = "Read minimized self connection metadata", description = "Local metadata is not current GitHub authorization or proof of upstream cleanup.")
     public ResponseEntity<GitHubResources.Connection> connection(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, HttpServletRequest request) {
@@ -299,6 +343,17 @@ public class GitHubController {
     }
     private static String token(int page) {
         return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(("p" + page).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+    }
+    /** The collaborator page size: absent means the default; repeated, empty or out-of-range values are invalid. */
+    private static int collaboratorPageSize(HttpServletRequest request, Integer pageSize) {
+        for (var name : List.of("pageSize", "pageToken")) {
+            var values = request.getParameterValues(name);
+            if (values != null && values.length > 1) { throw new ApiFailure(400, "INVALID_REQUEST"); }
+        }
+        if (pageSize == null && request.getParameter("pageSize") != null) { throw new ApiFailure(400, "INVALID_REQUEST"); }
+        int size = pageSize == null ? DEFAULT_COLLABORATOR_PAGE_SIZE : pageSize;
+        if (size < 1 || size > ReadOnlyGitHub.CollaboratorsRequest.MAX_PAGE_SIZE) { throw new ApiFailure(400, "INVALID_REQUEST"); }
+        return size;
     }
     /** The discovery form: legacy {@code limit} alone, or paged {@code pageSize} with optional {@code pageToken} and {@code q}. */
     private record DiscoveryForm(boolean legacy, int size, String filter) {}

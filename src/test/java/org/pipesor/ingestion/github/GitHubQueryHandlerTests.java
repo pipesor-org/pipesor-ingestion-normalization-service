@@ -17,10 +17,12 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.pipesor.ingestion.github.application.ports.*;
+import org.pipesor.ingestion.github.application.ports.ReadOnlyGitHub.Collaborator;
 import org.pipesor.ingestion.github.application.queries.*;
 import org.pipesor.ingestion.github.application.queryhandlers.GitHubQueryHandler;
 import org.pipesor.ingestion.github.application.services.GitHubAccessFailure;
 import org.pipesor.ingestion.github.domain.model.valueobjects.*;
+import org.pipesor.ingestion.shared.security.PlatformIds;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.pipesor.ingestion.github.application.services.GitHubAccessFailure.Reason.*;
@@ -464,6 +466,105 @@ class GitHubQueryHandlerTests {
         assertThrows(UnsupportedOperationException.class, () -> result.repositories().clear());
     }
 
+    private static final String TENANT = "11111111-1111-4111-8111-111111111111";
+    private static final String CALLER = TENANT + ":" + PlatformIds.human(42);
+    private static final AccessContext ADMINISTER = context(TENANT, CALLER, CALLER, AccessOperation.DISCOVER, "corr-10");
+
+    private static Fixture administrator() {
+        var f = new Fixture();
+        f.admittedTenant = TENANT;
+        f.link = link(ADMINISTER, "42", "revision-1");
+        return f;
+    }
+
+    private static Collaborator collaborator(String id, String login, CollaboratorRole role) {
+        return new Collaborator(id, login, java.net.URI.create("https://avatars.githubusercontent.com/u/" + id + "?v=4"), role);
+    }
+
+    @Test
+    void administratorSeesOneGitHubPageJoinedWithPipesorLinksInOneBatch() {
+        var f = administrator();
+        f.collaboratorList = List.of(collaborator("583231", "octocat", CollaboratorRole.ADMIN), new Collaborator("7", "reader", null, CollaboratorRole.READ));
+        f.linkedUsers = Set.of("583231");
+        f.moreCollaborators = true;
+        var result = f.handler.listCollaborators(new ListCollaboratorsQuery(ADMINISTER, FIRST, 3, 2));
+        assertEquals(ADMINISTER, result.context());
+        assertEquals(f.link, result.link());
+        assertEquals(NOW, result.observedAt());
+        assertEquals(new GitHubViews.Repository(FIRST, "org-one/api", "trunk"), result.repository());
+        assertEquals(List.of("583231", "7"), result.collaborators().stream().map(GitHubViews.Collaborator::githubUserId).toList());
+        var first = result.collaborators().get(0);
+        assertEquals(TENANT + ":" + PlatformIds.human(583231), first.principalRef());
+        assertEquals(first.principalRef(), first.principalRef().toLowerCase(java.util.Locale.ROOT));
+        assertTrue(first.linked());
+        assertEquals(CollaboratorRole.ADMIN, first.role());
+        assertFalse(result.collaborators().get(1).linked());
+        assertNull(result.collaborators().get(1).avatarUrl());
+        assertTrue(result.more());
+        assertEquals(3, f.lastCollaborators.page());
+        assertEquals(2, f.lastCollaborators.pageSize());
+        assertEquals(1, f.connectionReads.size(), "one batched link read per page");
+        assertEquals(java.util.UUID.fromString(TENANT), f.connectionReads.getFirst().tenantId());
+        assertEquals(Set.of(new PipesorConnections.Principal(PlatformIds.human(583231), "583231"), new PipesorConnections.Principal(PlatformIds.human(7), "7")),
+                f.connectionReads.getFirst().principals());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"reader", "unreadable", "unadmitted", "suspended"})
+    void onlyACurrentAdministratorOfAnAdmittedReadableRepositoryReachesCollaborators(String scenario) {
+        var f = administrator();
+        f.collaboratorList = List.of(collaborator("583231", "octocat", CollaboratorRole.ADMIN));
+        switch (scenario) {
+            case "reader" -> f.facts.put(FIRST, facts(FIRST, true, true, true, true, false));
+            case "unreadable" -> f.facts.put(FIRST, facts(FIRST, true, false, true, true, true));
+            case "suspended" -> f.facts.put(FIRST, facts(FIRST, false, true, true, true, true));
+            default -> f.admittedTenant = "another-tenant";
+        }
+        failure(DENIED, () -> f.handler.listCollaborators(new ListCollaboratorsQuery(ADMINISTER, FIRST, 1, 30)));
+        assertEquals(0, f.collaboratorReads);
+        assertTrue(f.connectionReads.isEmpty());
+    }
+
+    @Test
+    void emptyPageSkipsTheLinkReadAndInconsistentPagesAreUnavailable() {
+        var f = administrator();
+        var empty = f.handler.listCollaborators(new ListCollaboratorsQuery(ADMINISTER, FIRST, 1000, 100));
+        assertTrue(empty.collaborators().isEmpty());
+        assertFalse(empty.more());
+        assertTrue(f.connectionReads.isEmpty());
+        f.collaboratorList = List.of(collaborator("583231", "octocat", CollaboratorRole.ADMIN), collaborator("583231", "copy", CollaboratorRole.READ));
+        failure(UNAVAILABLE, () -> f.handler.listCollaborators(new ListCollaboratorsQuery(ADMINISTER, FIRST, 1, 30)));
+        for (var id : List.of("007", "0", "-1", "92233720368547758070", "x")) {
+            f.collaboratorList = List.of(collaborator(id, "octocat", CollaboratorRole.ADMIN));
+            failure(UNAVAILABLE, () -> f.handler.listCollaborators(new ListCollaboratorsQuery(ADMINISTER, FIRST, 1, 30)));
+        }
+        f.collaboratorList = List.of(collaborator("1", "a", CollaboratorRole.READ), collaborator("2", "b", CollaboratorRole.READ));
+        failure(UNAVAILABLE, () -> f.handler.listCollaborators(new ListCollaboratorsQuery(ADMINISTER, FIRST, 1, 1)));
+        f.extraLinked = Set.of(new PipesorConnections.Principal(PlatformIds.human(3), "3"));
+        failure(UNAVAILABLE, () -> f.handler.listCollaborators(new ListCollaboratorsQuery(ADMINISTER, FIRST, 1, 30)));
+        f.extraLinked = Set.of();
+        f.failBoundary = "connections";
+        f.failure = new RuntimeException("database outage");
+        failure(UNAVAILABLE, () -> f.handler.listCollaborators(new ListCollaboratorsQuery(ADMINISTER, FIRST, 1, 30)));
+    }
+
+    @Test
+    void principalReferencesNeedTheCanonicalTenantBeforeAnyRead() {
+        var f = administrator();
+        for (var tenant : List.of("ABCDEF01-1111-4111-8111-111111111111", "1-1-1-1-1", "tenant-a")) {
+            var context = context(tenant, "actor", "actor", AccessOperation.DISCOVER, "corr");
+            f.link = link(context, "42", "revision-1");
+            f.admittedTenant = tenant;
+            failure(UNAVAILABLE, () -> f.handler.listCollaborators(new ListCollaboratorsQuery(context, FIRST, 1, 30)));
+        }
+        assertEquals(0, f.providerCalls);
+        assertEquals(0, f.linkReads);
+        for (int[] bounds : new int[][]{{0, 30}, {1001, 30}, {1, 0}, {1, 101}}) {
+            assertThrows(IllegalArgumentException.class, () -> new ListCollaboratorsQuery(ADMINISTER, FIRST, bounds[0], bounds[1]));
+        }
+        assertThrows(IllegalArgumentException.class, () -> new ListCollaboratorsQuery(VIEW, FIRST, 1, 30));
+    }
+
     private static void invokeBoundary(Fixture f, String boundary) {
         switch (boundary) {
             case "repositories" -> f.handler.discoverRepositories(new DiscoverRepositoriesQuery(DISCOVER));
@@ -530,7 +631,16 @@ class GitHubQueryHandlerTests {
                 return List.copyOf(revokedOnNextCall);
             }
         };
-        final GitHubQueryHandler handler = new GitHubQueryHandler(this::link, this::admission, repositoryAdmissions, this, CLOCK);
+        List<Collaborator> collaboratorList = List.of();
+        boolean moreCollaborators;
+        int collaboratorReads;
+        CollaboratorsRequest lastCollaborators;
+        Set<String> linkedUsers = Set.of();
+        Set<PipesorConnections.Principal> extraLinked = Set.of();
+        final List<PipesorConnections.Request> connectionReads = new ArrayList<>();
+        String admittedTenant = "tenant-a";
+        final GitHubQueryHandler handler = new GitHubQueryHandler(this::link, this::admission, repositoryAdmissions, this,
+                this::connections, CLOCK);
 
         Fixture() {
             facts.put(FIRST, facts(FIRST, true, true, true, true, true));
@@ -548,7 +658,7 @@ class GitHubQueryHandlerTests {
             if (failSecondAdmission && admissions.size() == 2) { throw new RuntimeException("provider failure"); }
             boolean knownAccountInstallation = request.repository().equals(FIRST) && request.accountId().equals("acct-one")
                     || request.repository().equals(SECOND) && request.accountId().equals("acct-two");
-            return observed("admission", request, request.identity().context().tenantId().equals("tenant-a")
+            return observed("admission", request, request.identity().context().tenantId().equals(admittedTenant)
                     && (knownAccountInstallation && !request.repository().equals(deniedAdmission)
                     || selfAdmitted.contains(request.repository())));
         }
@@ -603,6 +713,20 @@ class GitHubQueryHandlerTests {
             workflowReads++;
             var run = new WorkflowRun("7001", 2, "failure", "main", "a".repeat(40), NOW, java.net.URI.create("https://github.com/x/y/actions/runs/7001"));
             return observed("runs", request, new RunPage(duplicateRuns ? List.of(run, run) : List.of(run), true));
+        }
+
+        @Override
+        public Observation<CollaboratorsRequest, CollaboratorPage> collaborators(CollaboratorsRequest request) {
+            collaboratorReads++;
+            lastCollaborators = request;
+            return observed("collaborators", request, new CollaboratorPage(collaboratorList, moreCollaborators));
+        }
+
+        Observation<PipesorConnections.Request, Set<PipesorConnections.Principal>> connections(PipesorConnections.Request request) {
+            connectionReads.add(request);
+            var linked = new java.util.HashSet<>(extraLinked);
+            request.principals().stream().filter(principal -> linkedUsers.contains(principal.githubUserId())).forEach(linked::add);
+            return observed("connections", request, Set.copyOf(linked));
         }
 
         WorkflowMetadata metadata(RepositoryTarget target) {

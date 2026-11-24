@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.pipesor.ingestion.github.domain.model.valueobjects.AccessContext;
+import org.pipesor.ingestion.github.domain.model.valueobjects.CollaboratorRole;
 import org.pipesor.ingestion.github.domain.model.valueobjects.RepositoryTarget;
 import org.pipesor.ingestion.github.domain.model.valueobjects.WorkflowMetadata;
 import org.pipesor.ingestion.github.domain.model.valueobjects.GitHubLink;
@@ -42,6 +43,17 @@ public final class GitHubViews {
         public Runs { runs = List.copyOf(runs); }
     }
     public record Selection(Access access, Repository repository, WorkflowMetadata workflow) {}
+    /**
+     * A human collaborator. {@code principalRef} is {@code <tenantId>:<objectId>} in canonical lower case;
+     * {@code linked} means the person currently holds a usable Pipesor GitHub link in that tenant.
+     */
+    public record Collaborator(String githubUserId, String login, java.net.URI avatarUrl, CollaboratorRole role,
+                               String principalRef, boolean linked) {}
+    /** One GitHub page of collaborators, in GitHub's order; {@code more} is GitHub's next-page signal. */
+    public record Collaborators(AccessContext context, GitHubLink link, Instant observedAt, Repository repository,
+                                List<Collaborator> collaborators, boolean more) {
+        public Collaborators { collaborators = List.copyOf(collaborators); }
+    }
     /** ADR-024: per repository, whether Pipesor admits it and whether the user administers it on GitHub. */
     public record RepositoryAdmission(String repositoryId, String fullName, boolean admitted, boolean userIsAdmin) {}
     public record Installation(String installationId, String accountId, String accountLogin, boolean active,

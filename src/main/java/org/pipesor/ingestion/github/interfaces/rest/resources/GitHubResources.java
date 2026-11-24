@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.pipesor.ingestion.github.domain.model.valueobjects.AccessOperation;
+import org.pipesor.ingestion.github.domain.model.valueobjects.CollaboratorRole;
 
 public final class GitHubResources {
     private GitHubResources() {}
@@ -56,6 +57,29 @@ public final class GitHubResources {
                                     requiredMode = Schema.RequiredMode.REQUIRED) String nextPageToken) {}
     public record Run(String runId, int attempt, String conclusion, String headBranch, String headSha, Instant createdAt,
                       Instant runStartedAt, String htmlUrl) {}
+    public record RepositoryReference(@Schema(example = "123", requiredMode = Schema.RequiredMode.REQUIRED) String repositoryId,
+                                      @Schema(example = "acme/payments-api", requiredMode = Schema.RequiredMode.REQUIRED) String fullName) {}
+    /** ADR-028: whether the collaborator currently holds an active Pipesor GitHub link in the caller's tenant. */
+    public enum PipesorConnection { ACTIVE, NONE }
+    public record Collaborator(@Schema(example = "583231", requiredMode = Schema.RequiredMode.REQUIRED) String githubUserId,
+                               @Schema(example = "octocat", requiredMode = Schema.RequiredMode.REQUIRED) String login,
+                               @Schema(description = "Absolute https avatar URL, otherwise null", types = {"string", "null"}, format = "uri",
+                                       example = "https://avatars.githubusercontent.com/u/583231?v=4",
+                                       requiredMode = Schema.RequiredMode.REQUIRED) String avatarUrl,
+                               @Schema(description = "Highest repository role from GitHub's permission flags; custom role names are not exposed",
+                                       allowableValues = {"READ", "TRIAGE", "WRITE", "MAINTAIN", "ADMIN"},
+                                       requiredMode = Schema.RequiredMode.REQUIRED) CollaboratorRole role,
+                               @Schema(description = "Grant principal <tenantId>:<objectId>, canonical lower-case UUIDs (platform identity contract v1)",
+                                       example = "11111111-1111-4111-8111-111111111111:4a620da1-fbd3-5c86-9069-fd891e9387aa",
+                                       requiredMode = Schema.RequiredMode.REQUIRED) String principalRef,
+                               @Schema(description = "ACTIVE when the collaborator currently holds an active Pipesor GitHub link in this tenant (ADR-028)",
+                                       allowableValues = {"ACTIVE", "NONE"},
+                                       requiredMode = Schema.RequiredMode.REQUIRED) PipesorConnection pipesorConnection) {}
+    public record Collaborators(@Schema(requiredMode = Schema.RequiredMode.REQUIRED) RepositoryReference repository,
+                                @Schema(requiredMode = Schema.RequiredMode.REQUIRED) List<Collaborator> items,
+                                @Schema(description = "Opaque token of the next page for the same repository, subject and pageSize; null on the last page",
+                                        types = {"string", "null"}, maxLength = 512,
+                                        requiredMode = Schema.RequiredMode.REQUIRED) String nextPageToken) {}
     public record Runs(List<Run> items, String nextPageToken) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Analysis(UUID analysisId, String phase, String blockedReason, UUID executionId, UUID incidentId) {}

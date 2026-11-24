@@ -217,4 +217,109 @@ class GitHubReadProviderTests {
         try{fail(UNAVAILABLE,()->provider().currentUser(IDENTITY));}finally{TransactionSynchronizationManager.setActualTransactionActive(false);}
         assertEquals(before,calls.size());
     }
+    private static final String COLLABORATORS="/repos/owner/repository/collaborators?affiliation=all&per_page=10&page=1";
+    private static final String ALL="{\"admin\":true,\"maintain\":true,\"push\":true,\"triage\":true,\"pull\":true}";
+    private void administer(){responses.put("/user/installations/81/repositories?per_page=2&page=1",page("repositories",REPO.replace("\"admin\":false","\"admin\":true")));}
+    private static String user(long id,String login,String type,String permissions,String avatar){
+        return "{\"id\":"+id+",\"login\":\""+login+"\",\"type\":\""+type+"\""+(avatar==null?"":",\"avatar_url\":"+avatar)
+                +(permissions==null?"":",\"permissions\":"+permissions)+"}";
+    }
+    private CollaboratorsRequest collaborators(int page,int size){return new CollaboratorsRequest(request(),page,size);}
+    @Test void collaboratorsAreOneAdministratorPageOfUsersWithFlagDerivedRolesInGitHubOrder(){
+        administer();
+        responses.put(COLLABORATORS,"["+String.join(",",
+                user(583231,"octocat","User",ALL,"\"https://avatars.githubusercontent.com/u/583231?v=4\""),
+                user(9,"dependabot[bot]","Bot",ALL,"\"https://avatars.githubusercontent.com/in/29110?v=4\""),
+                user(2,"main-tainer","User","{\"admin\":false,\"maintain\":true,\"push\":true,\"triage\":true,\"pull\":true}","\"http://avatars.example/u/2\""),
+                user(3,"writer","User","{\"admin\":false,\"push\":true,\"pull\":true}","\"/u/3\""),
+                user(10,"acme","Organization",ALL,null),
+                user(4,"Triager1","User","{\"admin\":false,\"maintain\":false,\"push\":false,\"triage\":true,\"pull\":true}","null")
+                        .replace("\"type\"","\"role_name\":\"custom-auditor\",\"type\""),
+                user(5,"reader","User","{\"admin\":false,\"maintain\":false,\"push\":false,\"triage\":false,\"pull\":true}","\"javascript:alert(1)\""),
+                user(6,"nobody","User","{\"admin\":false,\"maintain\":null,\"push\":false,\"pull\":false}","\"https://user:secret@avatars.example/u/6\""),
+                user(7,"former","User","{\"admin\":false,\"push\":false,\"pull\":true}","\"https://avatars.example/u/7#frag\""))+"]");
+        var observation=provider().collaborators(collaborators(1,10));
+        var page=observation.value();
+        assertEquals(collaborators(1,10),observation.request());assertEquals(NOW,observation.observedAt());
+        assertEquals(List.of("583231","2","3","4","5","7"),page.collaborators().stream().map(Collaborator::githubUserId).toList());
+        assertEquals(List.of("octocat","main-tainer","writer","Triager1","reader","former"),page.collaborators().stream().map(Collaborator::login).toList());
+        assertEquals(List.of(CollaboratorRole.ADMIN,CollaboratorRole.MAINTAIN,CollaboratorRole.WRITE,CollaboratorRole.TRIAGE,CollaboratorRole.READ,CollaboratorRole.READ),
+                page.collaborators().stream().map(Collaborator::role).toList());
+        assertEquals(URI.create("https://avatars.githubusercontent.com/u/583231?v=4"),page.collaborators().getFirst().avatarUrl());
+        assertTrue(page.collaborators().stream().skip(1).allMatch(collaborator->collaborator.avatarUrl()==null),"only absolute https avatars are kept");
+        assertFalse(page.more());
+        assertTrue(calls.contains(COLLABORATORS));
+        assertEquals(2,calls.stream().filter("/repos/owner/repository"::equals).count(),"the repository name binding is checked before and after");
+    }
+    @Test void nonAdministratorIsDeniedWithoutAskingGitHubForCollaborators(){
+        responses.put(COLLABORATORS,"[]");
+        fail(DENIED,()->provider().collaborators(collaborators(1,10)));
+        assertTrue(calls.stream().noneMatch(path->path.contains("/collaborators")));
+        administer();
+        for(var page:List.of(collaborators(0,10),collaborators(1001,10),collaborators(1,0),collaborators(1,101))){
+            fail(UNAVAILABLE,()->provider().collaborators(page));
+        }
+        assertTrue(calls.stream().noneMatch(path->path.contains("/collaborators")));
+    }
+    @Test void collaboratorPagesSignalMoreOnlyThroughAValidNextLink(){
+        administer();
+        var path="/repos/owner/repository/collaborators?affiliation=all&per_page=1&page=2";
+        responses.put(path,"["+user(583231,"octocat","User",ALL,null)+"]");
+        failurePath=path;extraHeader="Link";
+        var byId=root+"/repositories/900719925474099312345/collaborators";
+        extraValue="<"+byId+"?affiliation=all&per_page=1&page=1>; rel=\"prev\", <"+byId+"?affiliation=all&per_page=1&page=3>; rel=\"next\", <"+byId+"?affiliation=all&per_page=1&page=9>; rel=\"last\"";
+        assertTrue(provider().collaborators(collaborators(2,1)).value().more());
+        extraValue="<"+root+"/repos/owner/repository/collaborators?page=3&per_page=1&affiliation=all>; rel=\"next\"";
+        assertTrue(provider().collaborators(collaborators(2,1)).value().more());
+        extraValue="<"+byId+"?affiliation=all&per_page=1&page=1>; rel=\"first\", <"+byId+"?affiliation=all&per_page=1&page=1>; rel=\"prev\"";
+        assertFalse(provider().collaborators(collaborators(2,1)).value().more());
+        for(var hostile:List.of("<https://hostile.example/repos/owner/repository/collaborators?affiliation=all&per_page=1&page=3>; rel=\"next\"",
+                "<"+byId+"?affiliation=all&per_page=1&page=4>; rel=\"next\"",
+                "<"+byId+"?per_page=1&page=3>; rel=\"next\"",
+                "<"+byId+"?affiliation=direct&per_page=1&page=3>; rel=\"next\"",
+                "<"+byId+"?affiliation=all&per_page=1&page=3&steal=1>; rel=\"next\"",
+                "<"+root+"/repositories/789/collaborators?affiliation=all&per_page=1&page=3>; rel=\"next\"",
+                "<"+root+"/repos/owner/other/collaborators?affiliation=all&per_page=1&page=3>; rel=\"next\"",
+                "<"+byId+"?affiliation=all&per_page=1&page=3>; rel=\"next\", <"+byId+"?affiliation=all&per_page=1&page=3>; rel=\"next\"",
+                "<"+byId+"?affiliation=all&per_page=1&page=3>; rel=next")){
+            extraValue=hostile;
+            fail(UNAVAILABLE,()->provider().collaborators(collaborators(2,1)));
+        }
+        extraValue="<"+byId+"?affiliation=all&per_page=1&page=3>; rel=\"next\"";
+        responses.put(path,"[]");
+        fail(UNAVAILABLE,()->provider().collaborators(collaborators(2,1)));
+        assertFalse(calls.stream().anyMatch(call->call.contains("steal") || call.contains("page=3")));
+    }
+    @ParameterizedTest @ValueSource(strings={"../bad","-leading","bad_login","dependabot[bot]","a234567890123456789012345678901234567890"," "})
+    void invalidCollaboratorLoginIsAProviderInconsistency(String login){
+        administer();
+        responses.put(COLLABORATORS,"["+user(583231,"octocat","User",ALL,null)+","+user(2,login,"User",ALL,null)+"]");
+        fail(UNAVAILABLE,()->provider().collaborators(collaborators(1,10)));
+    }
+    @ParameterizedTest @ValueSource(strings={"missing-permissions","missing-push","string-triage","missing-type","duplicate-id","zero-id","huge-id","object-body","oversized-page","non-object-item"})
+    void incompatibleCollaboratorEvidenceFailsTheWholePage(String scenario){
+        administer();
+        var valid=user(583231,"octocat","User",ALL,null);
+        var eleven=new ArrayList<String>();
+        for(int index=1;index<=11;index++){eleven.add(user(index,"user"+index,"User",ALL,null));}
+        responses.put(COLLABORATORS,switch(scenario){
+            case "missing-permissions"->"["+user(2,"reader","User",null,null)+"]";
+            case "missing-push"->"["+user(2,"reader","User","{\"admin\":false,\"pull\":true}",null)+"]";
+            case "string-triage"->"["+user(2,"reader","User","{\"admin\":false,\"push\":false,\"triage\":\"yes\",\"pull\":true}",null)+"]";
+            case "missing-type"->"["+valid.replace(",\"type\":\"User\"","")+"]";
+            case "duplicate-id"->"["+valid+","+user(583231,"other","User",ALL,null)+"]";
+            case "zero-id"->"["+user(0,"reader","User",ALL,null)+"]";
+            case "huge-id"->"["+valid.replace("583231","92233720368547758070")+"]";
+            case "object-body"->"{\"collaborators\":["+valid+"]}";
+            case "oversized-page"->"["+String.join(",",eleven)+"]";
+            default->"["+valid+",\"octocat\"]";
+        });
+        fail(UNAVAILABLE,()->provider().collaborators(collaborators(1,10)));
+    }
+    @ParameterizedTest @ValueSource(ints={401,403,404,500})
+    void collaboratorStatusesKeepTheProviderFailureMapping(int code){
+        administer();
+        failurePath=COLLABORATORS;status=code;responses.put(COLLABORATORS,"{\"message\":\"private-provider-body\"}");
+        fail(code==401?CONNECTION_REQUIRED:code==404?DENIED:UNAVAILABLE,()->provider().collaborators(collaborators(1,10)));
+    }
 }

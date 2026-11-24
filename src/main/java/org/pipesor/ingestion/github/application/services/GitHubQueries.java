@@ -5,6 +5,7 @@ import org.pipesor.ingestion.github.application.queries.DiscoverRepositoryPageQu
 import org.pipesor.ingestion.github.application.queries.DiscoverWorkflowPageQuery;
 import org.pipesor.ingestion.github.application.queries.DiscoverWorkflowsQuery;
 import org.pipesor.ingestion.github.application.queries.GitHubViews;
+import org.pipesor.ingestion.github.application.queries.ListCollaboratorsQuery;
 import org.pipesor.ingestion.github.application.queries.SelectWorkflowQuery;
 import org.pipesor.ingestion.github.application.queries.VerifyAccessQuery;
 
@@ -20,4 +21,6 @@ public interface GitHubQueries {
     GitHubViews.WorkflowPage discoverWorkflowPage(DiscoverWorkflowPageQuery query);
     GitHubViews.Selection selectWorkflow(SelectWorkflowQuery query);
     GitHubViews.Runs listRuns(org.pipesor.ingestion.github.application.queries.ListRunsQuery query);
+    /** One GitHub page of collaborators, only for a current administrator of the repository, with their Pipesor link state. */
+    GitHubViews.Collaborators listCollaborators(ListCollaboratorsQuery query);
 }

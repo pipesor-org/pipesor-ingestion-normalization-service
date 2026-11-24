@@ -4,12 +4,16 @@ import java.time.Clock;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
 import java.util.function.Supplier;
 import org.pipesor.ingestion.github.application.ports.CurrentGitHubLink;
 import org.pipesor.ingestion.github.application.ports.InstallationAdmission;
+import org.pipesor.ingestion.github.application.ports.PipesorConnections;
 import org.pipesor.ingestion.github.application.ports.RepositoryAdmissions;
 import org.pipesor.ingestion.github.application.ports.Observation;
 import org.pipesor.ingestion.github.application.ports.ReadOnlyGitHub;
@@ -17,6 +21,7 @@ import org.pipesor.ingestion.github.application.queries.*;
 import org.pipesor.ingestion.github.application.services.GitHubAccessFailure;
 import org.pipesor.ingestion.github.application.services.GitHubQueries;
 import org.pipesor.ingestion.github.domain.model.valueobjects.*;
+import org.pipesor.ingestion.shared.security.PlatformIds;
 
 import static org.pipesor.ingestion.github.application.services.GitHubAccessFailure.Reason.*;
 
@@ -26,14 +31,16 @@ public final class GitHubQueryHandler implements GitHubQueries {
     private final InstallationAdmission admission;
     private final RepositoryAdmissions admissions;
     private final ReadOnlyGitHub github;
+    private final PipesorConnections connections;
     private final Clock clock;
 
     public GitHubQueryHandler(CurrentGitHubLink links, InstallationAdmission admission, RepositoryAdmissions admissions,
-                              ReadOnlyGitHub github, Clock clock) {
+                              ReadOnlyGitHub github, PipesorConnections connections, Clock clock) {
         this.links = Objects.requireNonNull(links);
         this.admission = Objects.requireNonNull(admission);
         this.admissions = Objects.requireNonNull(admissions);
         this.github = Objects.requireNonNull(github);
+        this.connections = Objects.requireNonNull(connections);
         this.clock = Objects.requireNonNull(clock);
     }
 
@@ -185,6 +192,58 @@ public final class GitHubQueryHandler implements GitHubQueries {
         }
         recheck(identity);
         return new GitHubViews.Runs(identity.context(), identity.link(), clock.instant(), view(repository), page.runs(), page.more());
+    }
+
+    /**
+     * ADR-028: only a current administrator of an admitted, readable repository (GitHub's {@code permissions.admin} in
+     * the user's installation listing) sees its collaborators. The Pipesor link state of the whole page is read in one
+     * batch after the GitHub read, never inside it.
+     */
+    @Override
+    public GitHubViews.Collaborators listCollaborators(ListCollaboratorsQuery query) {
+        var tenant = tenant(query.context());
+        var identity = begin(query.context());
+        var repository = repository(identity, query.repository());
+        var access = accessFacts(identity, repository);
+        if (!access.readable() || !access.administrator()) { throw failure(DENIED); }
+        var request = new ReadOnlyGitHub.CollaboratorsRequest(new ReadOnlyGitHub.RepositoryRequest(identity, query.repository()),
+                query.page(), query.pageSize());
+        var page = read(request, () -> github.collaborators(request));
+        if (page.collaborators().size() > query.pageSize()) { throw failure(UNAVAILABLE); }
+        var principals = new LinkedHashMap<String, PipesorConnections.Principal>();
+        for (var collaborator : page.collaborators()) {
+            if (collaborator == null || collaborator.role() == null || collaborator.login() == null
+                    || principals.put(collaborator.githubUserId(), principal(collaborator.githubUserId())) != null) {
+                throw failure(UNAVAILABLE);
+            }
+        }
+        var lookup = new PipesorConnections.Request(tenant, Set.copyOf(principals.values()));
+        Set<PipesorConnections.Principal> linked = lookup.principals().isEmpty() ? Set.of() : read(lookup, () -> connections.active(lookup));
+        if (!lookup.principals().containsAll(linked)) { throw failure(UNAVAILABLE); }
+        var views = new ArrayList<GitHubViews.Collaborator>();
+        for (var collaborator : page.collaborators()) {
+            var principal = principals.get(collaborator.githubUserId());
+            views.add(new GitHubViews.Collaborator(collaborator.githubUserId(), collaborator.login(), collaborator.avatarUrl(),
+                    collaborator.role(), tenant + ":" + principal.objectId(), linked.contains(principal)));
+        }
+        recheck(identity);
+        return new GitHubViews.Collaborators(identity.context(), identity.link(), clock.instant(), view(repository), views, page.more());
+    }
+
+    /** The caller's tenant in canonical lower-case UUID form, the only form principal references are issued in. */
+    private UUID tenant(AccessContext context) {
+        try {
+            var tenant = UUID.fromString(context.tenantId());
+            if (tenant.toString().equals(context.tenantId())) { return tenant; }
+        } catch (IllegalArgumentException invalid) { /* not a UUID */ }
+        throw failure(UNAVAILABLE);
+    }
+
+    /** The platform principal of a GitHub user ID (identity contract v1); a non-canonical ID is a provider inconsistency. */
+    private PipesorConnections.Principal principal(String githubUserId) {
+        if (githubUserId == null || !githubUserId.matches("[1-9][0-9]{0,18}")) { throw failure(UNAVAILABLE); }
+        try { return new PipesorConnections.Principal(PlatformIds.human(Long.parseLong(githubUserId)), githubUserId); }
+        catch (IllegalArgumentException invalid) { throw failure(UNAVAILABLE); }
     }
 
     private ReadOnlyGitHub.Identity begin(AccessContext context) {
