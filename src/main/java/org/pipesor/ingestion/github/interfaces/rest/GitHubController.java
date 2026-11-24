@@ -15,6 +15,7 @@ import org.pipesor.ingestion.github.application.queries.*;
 import org.pipesor.ingestion.github.application.services.*;
 import org.pipesor.ingestion.github.domain.model.valueobjects.*;
 import org.pipesor.ingestion.github.interfaces.rest.resources.GitHubResources;
+import org.pipesor.ingestion.github.interfaces.rest.transform.DiscoveryPageTokens;
 import org.pipesor.ingestion.shared.interfaces.rest.*;
 import org.pipesor.ingestion.shared.security.SubjectTokenFilter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
@@ -35,6 +36,9 @@ import org.springframework.web.bind.annotation.*;
 })
 public class GitHubController {
     private static final int DEFAULT_RUN_PAGE_SIZE = 24;
+    private static final String LIMIT = "Legacy form: complete list of at most limit items (1-100); excludes pageSize, pageToken and q";
+    private static final String PAGE_SIZE = "Paged form (required): items per page (1-100)";
+    private static final String PAGE_TOKEN = "Paged form: opaque nextPageToken of the previous page, valid only for the same route, repository and q";
     private final GitHubQueries queries;
     private final GitHubRepositorySelection selections;
     private final GitHubConnectionQueries connections;
@@ -88,16 +92,37 @@ public class GitHubController {
     }
 
     @GetMapping("/api/v1/github/repositories")
-    @Operation(summary = "Discover a complete bounded first page for the authenticated user", description = "Cursor continuation is unavailable until its binding protocol is accepted. A result exceeding limit returns 503; results are never silently truncated.")
+    @Operation(summary = "Discover the authenticated user's admitted and readable repositories",
+            description = "Reconciles repository admission first (ADR-024). Exactly one form: paged (pageSize, optional pageToken and q) "
+                    + "returns one page ordered by fullName case-insensitively, then numeric repositoryId, plus nextPageToken; "
+                    + "legacy (limit only) returns the complete list, or 503 VERIFICATION_UNAVAILABLE when it exceeds limit. "
+                    + "Both forms, neither form or cursor are 400 INVALID_REQUEST; a malformed pageToken, or one issued for another "
+                    + "route, repository or q, is 400 INVALID_PAGE_TOKEN.")
+    @ApiResponse(responseCode = "200", description = "Discovery context, repositories and nextPageToken",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = GitHubResources.Repositories.class)))
     public GitHubResources.Repositories repositories(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, HttpServletRequest request,
-                                                       @RequestParam int limit, @RequestParam(required = false) String cursor) {
-        page(limit, cursor);
+                                                       @Parameter(description = LIMIT, schema = @Schema(type = "integer", format = "int32", minimum = "1", maximum = "100")) @RequestParam(required = false) Integer limit,
+                                                       @Parameter(description = PAGE_SIZE, schema = @Schema(type = "integer", format = "int32", minimum = "1", maximum = "100")) @RequestParam(required = false) Integer pageSize,
+                                                       @Parameter(description = PAGE_TOKEN, schema = @Schema(maxLength = DiscoveryPageTokens.MAX_LENGTH)) @RequestParam(required = false) String pageToken,
+                                                       @Parameter(description = "Case-insensitive partial match on fullName; 2-100 characters after trimming",
+                                                               schema = @Schema(minLength = 2, maxLength = 100)) @RequestParam(required = false) String q) {
+        var form = form(request, limit, pageSize, pageToken, q);
         var context = RequestContext.self(jwt, request, limits, clock);
-        var result = queries.discoverRepositories(new DiscoverRepositoriesQuery(context.access()));
-        if (result == null || result.repositories().size() > limit) { throw ApiFailure.unavailable(); }
+        var discovery = new DiscoverRepositoriesQuery(context.access());
+        if (form.legacy()) {
+            var result = queries.discoverRepositories(discovery);
+            if (result == null || result.repositories().size() > form.size()) { throw ApiFailure.unavailable(); }
+            binding(context, result.context(), result.link(), result.observedAt());
+            return new GitHubResources.Repositories(discoveryContext(context, result.link(), result.observedAt()),
+                    result.repositories().stream().map(GitHubController::repository).toList(), null);
+        }
+        var tokens = DiscoveryPageTokens.Binding.repositories(context.access().subjectRef(), form.filter());
+        var page = new DiscoveryPage(form.size(), form.filter(), DiscoveryPageTokens.decode(pageToken, tokens));
+        var result = queries.discoverRepositoryPage(new DiscoverRepositoryPageQuery(discovery, page));
+        if (result == null || result.repositories().size() > form.size()) { throw ApiFailure.unavailable(); }
         binding(context, result.context(), result.link(), result.observedAt());
         return new GitHubResources.Repositories(discoveryContext(context, result.link(), result.observedAt()),
-                result.repositories().stream().map(GitHubController::repository).toList());
+                result.repositories().stream().map(GitHubController::repository).toList(), DiscoveryPageTokens.encode(result.next(), tokens));
     }
 
     @GetMapping("/api/v1/github/installations")
@@ -118,20 +143,42 @@ public class GitHubController {
     }
 
     @GetMapping("/api/v1/github/repositories/{repositoryId}/workflows")
-    @Operation(summary = "Discover a complete bounded first page of current workflows for self")
+    @Operation(summary = "Discover current workflows of one readable repository for self",
+            description = "Exactly one form: paged (pageSize, optional pageToken and q) returns one page ordered by name "
+                    + "case-insensitively, then numeric workflowId, plus nextPageToken; legacy (limit only) returns the complete list, "
+                    + "or 503 VERIFICATION_UNAVAILABLE when it exceeds limit. Both forms, neither form or cursor are 400 INVALID_REQUEST; "
+                    + "a malformed pageToken, or one issued for another route, repository or q, is 400 INVALID_PAGE_TOKEN.")
+    @ApiResponse(responseCode = "200", description = "Discovery context, repository, workflows and nextPageToken",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = GitHubResources.Workflows.class)))
     public GitHubResources.Workflows workflows(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, HttpServletRequest request,
-                                                 @PathVariable String repositoryId, @RequestParam int limit,
-                                                 @RequestParam(required = false) String cursor) {
-        page(limit, cursor);
+                                                 @PathVariable String repositoryId,
+                                                 @Parameter(description = LIMIT, schema = @Schema(type = "integer", format = "int32", minimum = "1", maximum = "100")) @RequestParam(required = false) Integer limit,
+                                                 @Parameter(description = PAGE_SIZE, schema = @Schema(type = "integer", format = "int32", minimum = "1", maximum = "100")) @RequestParam(required = false) Integer pageSize,
+                                                 @Parameter(description = PAGE_TOKEN, schema = @Schema(maxLength = DiscoveryPageTokens.MAX_LENGTH)) @RequestParam(required = false) String pageToken,
+                                                 @Parameter(description = "Case-insensitive partial match on the workflow name or file; 2-100 characters after trimming",
+                                                         schema = @Schema(minLength = 2, maxLength = 100)) @RequestParam(required = false) String q) {
+        var form = form(request, limit, pageSize, pageToken, q);
         var context = RequestContext.self(jwt, request, limits, clock);
-        var targets = resolve(context, ids(List.of(repositoryId)));
+        var ids = ids(List.of(repositoryId));
+        var tokens = DiscoveryPageTokens.Binding.workflows(repositoryId, context.access().subjectRef(), form.filter());
+        var after = form.legacy() ? null : DiscoveryPageTokens.decode(pageToken, tokens);
+        var targets = resolve(context, ids);
         var target = targets.get(repositoryId).orElseThrow(() -> new ApiFailure(403, "DENIED"));
-        var result = queries.discoverWorkflows(new DiscoverWorkflowsQuery(new DiscoverRepositoriesQuery(context.access()), target));
+        var discovery = new DiscoverWorkflowsQuery(new DiscoverRepositoriesQuery(context.access()), target);
+        if (form.legacy()) {
+            var result = queries.discoverWorkflows(discovery);
+            if (result == null || !target.equals(result.repository().target())
+                    || result.workflows().size() > form.size()) { throw ApiFailure.unavailable(); }
+            binding(context, result.context(), result.link(), result.observedAt());
+            return new GitHubResources.Workflows(discoveryContext(context, result.link(), result.observedAt()), repository(result.repository()),
+                    workflows(result.workflows()), null);
+        }
+        var result = queries.discoverWorkflowPage(new DiscoverWorkflowPageQuery(discovery, new DiscoveryPage(form.size(), form.filter(), after)));
         if (result == null || !target.equals(result.repository().target())
-                || result.workflows().size() > limit) { throw ApiFailure.unavailable(); }
+                || result.workflows().size() > form.size()) { throw ApiFailure.unavailable(); }
         binding(context, result.context(), result.link(), result.observedAt());
-        return new GitHubResources.Workflows(discoveryContext(context, result.link(), result.observedAt()), repository(result.repository()), result.workflows().stream()
-                .map(workflow -> new GitHubResources.Workflow(workflow.workflowId(), workflow.name(), workflow.file())).toList());
+        return new GitHubResources.Workflows(discoveryContext(context, result.link(), result.observedAt()), repository(result.repository()),
+                workflows(result.workflows()), DiscoveryPageTokens.encode(result.next(), tokens));
     }
 
     @GetMapping("/api/v1/github/repositories/{repositoryId}/workflows/{workflowId}/runs")
@@ -253,7 +300,24 @@ public class GitHubController {
     private static String token(int page) {
         return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(("p" + page).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
     }
-    private void page(int limit, String cursor) { if (limit < 1 || limit > limits.maxPageSize() || cursor != null) { throw new ApiFailure(400, "INVALID_REQUEST"); } }
+    /** The discovery form: legacy {@code limit} alone, or paged {@code pageSize} with optional {@code pageToken} and {@code q}. */
+    private record DiscoveryForm(boolean legacy, int size, String filter) {}
+    private DiscoveryForm form(HttpServletRequest request, Integer limit, Integer pageSize, String pageToken, String q) {
+        for (var name : List.of("pageSize", "pageToken", "q")) {
+            var values = request.getParameterValues(name);
+            if (values != null && values.length > 1) { throw new ApiFailure(400, "INVALID_REQUEST"); }
+        }
+        boolean paged = pageSize != null || pageToken != null || q != null;
+        if (request.getParameterMap().containsKey("cursor") || paged == (limit != null)) { throw new ApiFailure(400, "INVALID_REQUEST"); }
+        int size = paged ? Objects.requireNonNullElse(pageSize, 0) : limit;
+        int max = paged ? Math.min(limits.maxPageSize(), DiscoveryPage.MAX_SIZE) : limits.maxPageSize();
+        if (size < 1 || size > max) { throw new ApiFailure(400, "INVALID_REQUEST"); }
+        try { return new DiscoveryForm(!paged, size, DiscoveryPage.filter(q)); }
+        catch (IllegalArgumentException invalid) { throw new ApiFailure(400, "INVALID_REQUEST"); }
+    }
+    private static List<GitHubResources.Workflow> workflows(List<WorkflowMetadata> workflows) {
+        return workflows.stream().map(workflow -> new GitHubResources.Workflow(workflow.workflowId(), workflow.name(), workflow.file())).toList();
+    }
     private static Set<RepositoryTarget> resolved(Map<String, Optional<RepositoryTarget>> selections) {
         var resolved = new HashSet<RepositoryTarget>();
         selections.values().forEach(target -> target.ifPresent(resolved::add));

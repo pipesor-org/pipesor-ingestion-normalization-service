@@ -183,6 +183,82 @@ class GitHubQueryHandlerTests {
         assertEquals("93", second.workflows().getFirst().workflowId());
     }
 
+    @Test
+    void pagedWorkflowDiscoveryResumesStrictlyAfterThePositionEvenWhenItemsVanishOrKeysAreBounded() {
+        var f = new Fixture();
+        var longName = "X".repeat(400);
+        f.workflowList = List.of(workflow("4", "y"), workflow("3", longName + "c"), workflow("12", longName + "B"),
+                workflow("2", longName + "b"), workflow("1", longName + "a"));
+        var first = workflowPage(f, 2, null, null);
+        assertEquals(List.of("1", "2"), workflowIds(first));
+        assertEquals(new DiscoveryPage.Position(DiscoveryPage.key(longName + "b"), "2", false), first.next());
+        assertEquals(DISCOVER, first.context());
+        assertEquals(FIRST, first.repository().target());
+        assertEquals(List.of("12", "3"), workflowIds(workflowPage(f, 2, null, first.next())));
+        // A bounded (prefix) position resumes after its exact item while that item still exists ...
+        var bounded = new DiscoveryPage.Position("x".repeat(300), "2", true);
+        assertEquals(List.of("12", "3", "4"), workflowIds(workflowPage(f, 10, null, bounded)));
+        // ... and otherwise repeats the items sharing the prefix rather than skipping any.
+        f.workflowList = f.workflowList.stream().filter(workflow -> !workflow.workflowId().equals("2")).toList();
+        assertEquals(List.of("1", "12", "3", "4"), workflowIds(workflowPage(f, 10, null, bounded)));
+        assertEquals(List.of("12", "3"), workflowIds(workflowPage(f, 2, null, first.next())));
+        assertNull(workflowPage(f, 2, null, new DiscoveryPage.Position(DiscoveryPage.key(longName + "c"), "3", false)).next());
+        var filtered = workflowPage(f, 10, DiscoveryPage.filter(" XXB "), null);
+        assertEquals(List.of("12"), workflowIds(filtered));
+        f.workflowList = List.of(workflow("1", "build"), new WorkflowMetadata(FIRST, "2", "deploy", ".github/workflows/Build-Release.yml"));
+        assertEquals(List.of("1", "2"), workflowIds(workflowPage(f, 10, DiscoveryPage.filter("BUILD"), null)));
+        f.workflowList = List.of(workflow("1", "build"), workflow("not-numeric", "test"));
+        failure(UNAVAILABLE, () -> workflowPage(f, 10, null, null));
+    }
+
+    @Test
+    void pagedRepositoryDiscoveryReconcilesAndRefusesAnAmbiguousOrder() {
+        var f = new Fixture();
+        var page = f.handler.discoverRepositoryPage(new DiscoverRepositoryPageQuery(new DiscoverRepositoriesQuery(DISCOVER),
+                new DiscoveryPage(1, null, null)));
+        assertEquals(List.of(FIRST), page.repositories().stream().map(GitHubViews.Repository::target).toList());
+        assertEquals(new DiscoveryPage.Position("org-one/api", FIRST.repositoryId(), false), page.next());
+        assertEquals(2, f.revocations.size(), "admissions are reconciled for the page");
+        var rest = f.handler.discoverRepositoryPage(new DiscoverRepositoryPageQuery(new DiscoverRepositoriesQuery(DISCOVER),
+                new DiscoveryPage(1, null, page.next())));
+        assertEquals(List.of(SECOND), rest.repositories().stream().map(GitHubViews.Repository::target).toList());
+        assertNull(rest.next());
+        var twin = new RepositoryTarget(FIRST.repositoryId(), "999");
+        f.facts.put(twin, new RepositoryFacts(twin, "acct-three", true, true, true, true, true, "ORG-ONE/API", null));
+        assertEquals(3, f.handler.discoverRepositories(new DiscoverRepositoriesQuery(DISCOVER)).repositories().size());
+        failure(UNAVAILABLE, () -> f.handler.discoverRepositoryPage(new DiscoverRepositoryPageQuery(
+                new DiscoverRepositoriesQuery(DISCOVER), new DiscoveryPage(10, null, null))));
+    }
+
+    @Test
+    void discoveryPageBoundsSizeFilterAndPosition() {
+        assertEquals("ab", DiscoveryPage.filter("  Ab \t"));
+        assertNull(DiscoveryPage.filter(null));
+        assertEquals("\uD83D\uDE00".repeat(100), DiscoveryPage.filter("\uD83D\uDE00".repeat(100)));
+        for (var invalid : List.of("", " a ", "a".repeat(101), "\uD83D\uDE00".repeat(101))) {
+            assertThrows(IllegalArgumentException.class, () -> DiscoveryPage.filter(invalid), invalid);
+        }
+        assertThrows(IllegalArgumentException.class, () -> new DiscoveryPage(0, null, null));
+        assertThrows(IllegalArgumentException.class, () -> new DiscoveryPage(101, null, null));
+        assertThrows(IllegalArgumentException.class, () -> new DiscoveryPage(5, " ", null));
+        assertThrows(IllegalArgumentException.class, () -> new DiscoveryPage.Position("", "1", false));
+        assertThrows(IllegalArgumentException.class, () -> new DiscoveryPage.Position("a", "1a", false));
+        assertThrows(IllegalArgumentException.class, () -> new DiscoveryPage.Position("a", "", false));
+    }
+
+    private static GitHubViews.WorkflowPage workflowPage(Fixture f, int size, String filter, DiscoveryPage.Position after) {
+        return f.handler.discoverWorkflowPage(new DiscoverWorkflowPageQuery(new DiscoverWorkflowsQuery(new DiscoverRepositoriesQuery(DISCOVER), FIRST),
+                new DiscoveryPage(size, filter, after)));
+    }
+
+    private static List<String> workflowIds(GitHubViews.WorkflowPage page) {
+        return page.workflows().stream().map(WorkflowMetadata::workflowId).toList();
+    }
+
+    private static WorkflowMetadata workflow(String id, String name) {
+        return new WorkflowMetadata(FIRST, id, name, ".github/workflows/" + id + ".yml");
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"repository", "installation", "workflow"})
     void refusesMetadataForAnotherSelection(String field) {
@@ -427,6 +503,7 @@ class GitHubQueryHandlerTests {
         String actualUser;
         Function<RepositoryRequest, RepositoryRequest> repositoryEcho = Function.identity();
         WorkflowMetadata workflowOverride;
+        List<WorkflowMetadata> workflowList;
         String offsetBoundary;
         long offset;
         String failBoundary;
@@ -512,7 +589,7 @@ class GitHubQueryHandlerTests {
         @Override
         public Observation<RepositoryRequest, List<WorkflowMetadata>> workflows(RepositoryRequest request) {
             workflowReads++;
-            return observed("workflows", request, List.of(metadata(request.repository())));
+            return observed("workflows", request, workflowList != null ? workflowList : List.of(metadata(request.repository())));
         }
 
         @Override
